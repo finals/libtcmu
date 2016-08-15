@@ -3,9 +3,18 @@ package libtcmu
 import (
 	"sync"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/jochenvg/go-udev"
-	"strings"
+)
+
+const (
+	CREATE_TIMEOUT = 30 * time.Second
+
+	SUCCESS = 0
+	ERROR = 1
+	TIMEOUT = 2
 )
 
 var (
@@ -15,6 +24,7 @@ var (
 type HBA struct {
 	sync.Mutex
 	vbdInitializing *VirtBlockDevice
+	devEvent        chan *udev.Device
 	stopC           chan struct{}
 }
 
@@ -25,6 +35,7 @@ func NewHBA() *HBA {
 
 	hba = &HBA{}
 	hba.stopC = make(chan struct{})
+	hba.devEvent = make(chan *udev.Device, 32)
 	hba.vbdInitializing = nil
 	return hba
 }
@@ -41,19 +52,67 @@ func (h *HBA) Stop() error {
 
 func (h *HBA) CreateDevice(devPath string, scsi *ScsiHandler) (*VirtBlockDevice, error) {
 	h.Lock()
-	defer h.Unlock()
+	//defer h.Unlock()
 
 	if h.vbdInitializing != nil {
 		return nil, fmt.Errorf("Error: other vbd initializing, try again")
 	}
 
+	completion := make(chan int)
+	go h.CreateDeviceComplete(completion)
 	vbd, err := newVirtBlockDevice(devPath, scsi)
 	if err != nil {
 		log.Errorf("[CreateDevice] devPath:%s error:%s", devPath, err.Error())
 		return nil, err
 	}
 	h.vbdInitializing = vbd
+	result := <-completion
+	if result != SUCCESS {
+		vbd.Close()
+		log.Errorf("[CreateDevice] devPath:%s, wait to generate device error:%d", result)
+		return nil, fmt.Errorf("wait to generate device error:%d", result)
+	}
 	return vbd, nil
+}
+
+func (h *HBA) CreateDeviceComplete(completion chan int) {
+	log.Infof("[CreateDeviceComplete] start")
+	timeout := time.After(CREATE_TIMEOUT)
+	for {
+		select {
+		case dev := <-h.devEvent:
+			log.Infof("[CreateDeviceComplete] receive event")
+			if "add" != dev.Action() {
+				continue
+			}
+			log.Infof("[CreateDeviceComplete] ID_MODEL: %s", dev.PropertyValue("ID_MODEL"))
+			if !strings.Contains(dev.PropertyValue("ID_MODEL"), "TCMU_Device") {
+				log.Errorf("[CreateDeviceComplete] udev report not tcmu device, wait for:%s", dev.Devnode())
+				continue
+			}
+
+			if h.vbdInitializing != nil {
+				dnum := dev.Devnum()
+				log.Infof("[CreateDeviceComplete] major:%d, minor:%d", dnum.Major(), dnum.Minor())
+				h.vbdInitializing.SetDeviceNumber(dnum.Major(), dnum.Minor())
+				err := h.vbdInitializing.GenerateDevEntry()
+				h.Unlock()
+				if err != nil {
+					log.Errorf("[CreateDeviceComplete] Generate virtdisk device error:%s", err.Error())
+					completion <- ERROR
+				} else {
+					completion <- SUCCESS
+				}
+				h.vbdInitializing = nil
+				return
+			}
+		case <-timeout:
+			log.Errorf("[CreateDeviceComplete] Generate virtdisk device error:Timeout")
+			h.Unlock()
+			completion <- TIMEOUT
+			return
+		}
+	}
 }
 
 func (h *HBA) monitorDeviceEvent() {
@@ -77,21 +136,12 @@ func (h *HBA) monitorDeviceEvent() {
 				continue
 			}
 			log.Infof("[monitorDeviceEvent] ID_MODEL: %s", dev.PropertyValue("ID_MODEL"))
-		//if "TCMU_device" != dev.PropertyValue("ID_MODEL") {
 			if !strings.Contains(dev.PropertyValue("ID_MODEL"), "TCMU_Device") {
 				log.Errorf("[monitorDeviceEvent] udev report not tcmu device, wait for:%s", dev.Devnode())
 				continue
 			}
-
-			h.Lock()
-		//log.Infof("[monitorDeviceEvent] VBD Initializing: %+v", h.vbdInitializing)
-			if h.vbdInitializing != nil {
-				dnum := dev.Devnum()
-				log.Infof("[monitorDeviceEvent] major:%d, minor:%d", dnum.Major(), dnum.Minor())
-				h.vbdInitializing.SetDeviceNumber(dnum.Major(), dnum.Minor())
-				h.vbdInitializing = nil
-			}
-			h.Unlock()
+			log.Infof("[monitorDeviceEvent] dev: %s", dev.Devnode())
+			h.devEvent <- dev
 		//log.Debugf("[monitorDeviceEvent] receive event:%s", dev.Action())
 		case <-h.stopC:
 			log.Infof("[monitorDeviceEvent] Stop Monitor Device Event")
