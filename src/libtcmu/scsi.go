@@ -45,7 +45,8 @@ func (cmd *ScsiCmd) Command() byte {
 // CdbLen returns the length of the command, in bytes.
 func (cmd *ScsiCmd) CdbLen() int {
 	opcode := cmd.cdb[0]
-	// See spc5r11 4.2.5.1 operation code
+	// See spc-4 4.2.5.1 operation code
+	//
 	if opcode <= 0x1f {
 		return 6
 	} else if opcode <= 0x5f {
@@ -319,10 +320,11 @@ func BasicScsiHandler(rw ReadWriteAt) *ScsiHandler {
 		WWN: GenerateTestWWN("testvbd"),
 		VolumeName: "testvbd",
 		DataSizes: DataSizes{1024 * 1024 * 1024, 1024}, //1G, 1k
-		DevReady: SingleThreadedDevReady(
+		DevReady: MultiThreadedDevReady(
 			ReadWriteAtCmdHandler{
 				RW: rw,
 			},
+			2,
 		),
 	}
 }
@@ -334,10 +336,11 @@ func BasicScsiHandler2(rw ReadWriteAt) *ScsiHandler {
 		WWN: GenerateTestWWN("testvbd2"),
 		VolumeName: "testvbd2",
 		DataSizes: DataSizes{1024 * 1024 * 1024, 1024}, //1G, 1k
-		DevReady: SingleThreadedDevReady(
+		DevReady: MultiThreadedDevReady(
 			ReadWriteAtCmdHandler{
 				RW: rw,
 			},
+			2,
 		),
 	}
 }

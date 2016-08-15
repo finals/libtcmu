@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"libtcmu/scsi"
+	"fmt"
 )
 
 // ScsiCmdHandler is a simple request/response handler for SCSI commands commint to TCMU
@@ -74,7 +75,7 @@ func FixedString(s string, length int) []byte {
 	if l >= length {
 		return p[:length]
 	}
-	sp := bytes.Repeat([]byte{' '}, length - 1)
+	sp := bytes.Repeat([]byte{' '}, length - l)
 	return append(p, sp...)
 }
 
@@ -339,6 +340,18 @@ func EmulateRead(cmd *ScsiCmd, r io.ReaderAt) (ScsiResponse, error) {
 	if err != nil {
 		return cmd.MediumError(), nil
 	}
+
+	n, err = cmd.Write(cmd.Buffer[:length])
+	if n < length {
+		fmt.Printf("read/write failed: unable to copy enough")
+		return cmd.MediumError(), nil
+	}
+
+	if err != nil {
+		fmt.Printf("read/write failed: error:", err.Error())
+		return cmd.MediumError(), nil
+	}
+
 	return cmd.Ok(), nil
 }
 
@@ -354,17 +367,21 @@ func EmulateWrite(cmd *ScsiCmd, r io.WriterAt) (ScsiResponse, error) {
 	}
 	n, err := cmd.Read(cmd.Buffer[:int(length)])
 	if n < length {
+		fmt.Printf("write/read failed: unable to copy enough")
 		return cmd.MediumError(), nil
 	}
 	if err != nil {
+		fmt.Printf("read/write failed: error:", err.Error())
 		return cmd.MediumError(), nil
 	}
 
 	n, err = r.WriteAt(cmd.Buffer[:length], int64(offset))
 	if n < length {
+		fmt.Printf("write/read failed: unable to copy enough")
 		return cmd.MediumError(), nil
 	}
 	if err != nil {
+		fmt.Printf("read/write failed: error:", err.Error())
 		return cmd.MediumError(), nil
 	}
 	return cmd.Ok(), nil

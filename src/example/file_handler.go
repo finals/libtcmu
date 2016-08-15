@@ -73,7 +73,7 @@ func test2() {
 
 func main() {
 	go test1()
-	go test2()
+	//go test2()
 
 	for {
 		time.Sleep(30 * time.Second)
