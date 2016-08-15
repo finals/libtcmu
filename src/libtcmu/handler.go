@@ -18,13 +18,13 @@ func (vbd *VirtBlockDevice) beginPoll() {
 		var err error
 		n, err = unix.Read(vbd.uioFd, buf)
 		if n == -1 && err != nil {
-			fmt.Println(err)
+			log.Debugf(err.Error())
 			break
 		}
 		for {
 			cmd, err := vbd.getNextCommand()
 			if err != nil {
-				fmt.Printf("error getting next command: %s", err)
+				log.Debugf("error getting next command: %s", err.Error())
 				break
 			}
 			if cmd == nil {
@@ -42,7 +42,7 @@ func (vbd *VirtBlockDevice) recvResponse() {
 	for resp := range vbd.respChan {
 		err := vbd.completeCommand(resp)
 		if err != nil {
-			fmt.Printf("error completing command: %s", err)
+			log.Debugf("error completing command: %s", err.Error())
 			return
 		}
 		/* Tell the fd there's something new */

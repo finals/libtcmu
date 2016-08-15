@@ -96,7 +96,7 @@ func (c *ScsiCmd) XferLen() uint32 {
 	case 16:
 		return uint32(order.Uint32(c.cdb[10:14]))
 	default:
-		fmt.Printf("What XferLen has this length: %d", c.CdbLen())
+		log.Debugf("What XferLen has this length: %d", c.CdbLen())
 		panic("unusal scsi command length")
 	}
 }
@@ -399,4 +399,3 @@ func MultiThreadedDevReady(h ScsiCmdHandler, threads int) DevReadyFunc {
 		return nil
 	}
 }
-

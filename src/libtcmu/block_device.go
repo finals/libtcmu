@@ -24,6 +24,8 @@ type VirtBlockDevice struct {
 	devPath    string
 	hbaDir     string
 	deviceName string
+	major      int
+	minor      int
 
 	uioFd      int
 	mapsize    uint64
@@ -47,10 +49,10 @@ func (vbd *VirtBlockDevice) Sizes() DataSizes {
 	return vbd.scsi.DataSizes
 }
 
-// NewVirtBlockDevice creates the virtual device based on the details in the ScsiHandler, eventually creating
+// newVirtBlockDevice creates the virtual device based on the details in the ScsiHandler, eventually creating
 // a device under devPath (eg, "/dev") with the file name scsi.VolumeName;
 // The returned vbd represents the open device connection to the kernel, and must be closed.
-func NewVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirtBlockDevice, error) {
+func newVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirtBlockDevice, error) {
 	vbd := &VirtBlockDevice{
 		scsi: scsi,
 		devPath: devPath,
@@ -65,6 +67,7 @@ func NewVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirtBlockDevice, er
 	if err := vbd.preEnableTcmu(); err != nil {
 		return nil, err
 	}
+
 	if err := vbd.boot(); err != nil {
 		return nil, err
 	}
@@ -127,7 +130,24 @@ func (vbd *VirtBlockDevice) postEnableTcmu() error {
 		return err
 	}
 
-	return vbd.createDevEntry()
+	//return vbd.createDevEntry()
+	return nil
+}
+
+func (vbd *VirtBlockDevice) SetDeviceNumber(major, minor int) {
+	vbd.major = major
+	vbd.minor = minor
+}
+
+func (vbd *VirtBlockDevice) GenerateDevEntry() error {
+	dev := filepath.Join(vbd.devPath, vbd.scsi.VolumeName)
+	log.Infof("[GenerateDevEntry] dev:%s  major:%d, minor:%d", dev, vbd.major, vbd.minor)
+	err := mknod(dev, vbd.major, vbd.minor)
+	if err != nil {
+		log.Infof("[GenerateDevEntry] error:%s", err.Error())
+		return err
+	}
+	return nil
 }
 
 func (vbd *VirtBlockDevice) createDevEntry() error {
@@ -157,7 +177,7 @@ func (vbd *VirtBlockDevice) createDevEntry() error {
 			break
 		}
 
-		fmt.Printf("Waiting for %s", path)
+		log.Debugf("Waiting for %s", path)
 		time.Sleep(1 * time.Second)
 	}
 
@@ -192,7 +212,7 @@ func (vbd *VirtBlockDevice) createDevEntry() error {
 		return err
 	}
 
-	fmt.Printf("Creating device %s %d:%d", dev, major, minor)
+	log.Debugf("Creating device %s %d:%d", dev, major, minor)
 	return mknod(dev, major, minor)
 }
 
@@ -207,7 +227,7 @@ func mknod(device string, major, minor int) error {
 func writeLines(target string, lines []string) error {
 	dir := path.Dir(target)
 	if stat, err := os.Stat(dir); os.IsNotExist(err) {
-		fmt.Printf("Creating directory: %s", dir)
+		log.Debugf("Creating directory: %s", dir)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
@@ -217,9 +237,9 @@ func writeLines(target string, lines []string) error {
 
 	for _, line := range lines {
 		content := []byte(line + "\n")
-		fmt.Printf("Setting %s: %s", target, line)
+		log.Debugf("Setting %s: %s", target, line)
 		if err := ioutil.WriteFile(target, content, 0755); err != nil {
-			fmt.Printf("Failed to write %s to %s: %v", line, target, err)
+			log.Debugf("Failed to write %s to %s: %v", line, target, err)
 			return err
 		}
 	}
@@ -354,12 +374,12 @@ func (vbd *VirtBlockDevice) teardown() error {
 }
 
 func removeAsync(path string, done chan <- error) {
-	fmt.Printf("Removing: %s", path)
+	log.Debugf("Removing: %s", path)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		fmt.Errorf("Unable to remove: %v", path)
+		log.Debugf("Unable to remove: %v", path)
 		done <- err
 	}
-	fmt.Printf("Removed: %s", path)
+	log.Debugf("Removed: %s", path)
 	done <- nil
 }
 
