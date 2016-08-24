@@ -9,31 +9,31 @@ import (
 
 var byteOrder binary.ByteOrder = binary.LittleEndian
 
-func (vbd *VirtBlockDevice) mbVersion() uint16 {
-	return *(*uint16) (unsafe.Pointer(&vbd.mmap[0]))
+func (vbd *VirBlkDev) mbVersion() uint16 {
+	return *(*uint16)(unsafe.Pointer(&vbd.mmap[0]))
 }
 
-func (vbd *VirtBlockDevice) mbFlags() uint16 {
+func (vbd *VirBlkDev) mbFlags() uint16 {
 	return *(*uint16)(unsafe.Pointer(&vbd.mmap[2]))
 }
 
-func (vbd *VirtBlockDevice) mbCmdrOffset() uint32 {
+func (vbd *VirBlkDev) mbCmdrOffset() uint32 {
 	return *(*uint32)(unsafe.Pointer(&vbd.mmap[4]))
 }
 
-func (vbd *VirtBlockDevice) mbCmdrSize() uint32 {
+func (vbd *VirBlkDev) mbCmdrSize() uint32 {
 	return *(*uint32)(unsafe.Pointer(&vbd.mmap[8]))
 }
 
-func (vbd *VirtBlockDevice)mbCmdHead() uint32 {
+func (vbd *VirBlkDev) mbCmdHead() uint32 {
 	return *(*uint32)(unsafe.Pointer(&vbd.mmap[12]))
 }
 
-func (vbd *VirtBlockDevice) mbCmdTail() uint32 {
+func (vbd *VirBlkDev) mbCmdTail() uint32 {
 	return *(*uint32)(unsafe.Pointer(&vbd.mmap[64]))
 }
 
-func (vbd *VirtBlockDevice) mbSetTail(u uint32) {
+func (vbd *VirBlkDev) mbSetTail(u uint32) {
 	byteOrder.PutUint32(vbd.mmap[64:], u)
 }
 
@@ -62,32 +62,32 @@ struct tcmu_cmd_entry_hdr {
 
 } __packed;
 */
-func (vbd *VirtBlockDevice) entHdrOp(off int) tcmuOpcode {
+func (vbd *VirBlkDev) entHdrOp(off int) tcmuOpcode {
 	i := int(*(*uint32)(unsafe.Pointer(&vbd.mmap[off + offLenOp])))
 	i = i & 0x7
 	return tcmuOpcode(i)
 }
 
-func (vbd *VirtBlockDevice) entHdrGetLen(off int) int {
+func (vbd *VirBlkDev) entHdrGetLen(off int) int {
 	i := *(*uint32)(unsafe.Pointer(&vbd.mmap[off + offLenOp]))
 	i = i &^ 0x7
 	return int(i)
 }
 
-func (vbd *VirtBlockDevice) entCmdId(off int) uint16 {
+func (vbd *VirBlkDev) entCmdId(off int) uint16 {
 	return *(*uint16)(unsafe.Pointer(&vbd.mmap[off + offCmdId]))
 }
-func (vbd *VirtBlockDevice) setEntCmdId(off int, id uint16) {
+func (vbd *VirBlkDev) setEntCmdId(off int, id uint16) {
 	*(*uint16)(unsafe.Pointer(&vbd.mmap[off + offCmdId])) = id
 }
-func (vbd *VirtBlockDevice) entKflags(off int) uint8 {
+func (vbd *VirBlkDev) entKflags(off int) uint8 {
 	return *(*uint8)(unsafe.Pointer(&vbd.mmap[off + offKFlags]))
 }
-func (vbd *VirtBlockDevice) entUflags(off int) uint8 {
+func (vbd *VirBlkDev) entUflags(off int) uint8 {
 	return *(*uint8)(unsafe.Pointer(&vbd.mmap[off + offUFlags]))
 }
 
-func (vbd *VirtBlockDevice) setEntUflagUnknownOp(off int) {
+func (vbd *VirBlkDev) setEntUflagUnknownOp(off int) {
 	vbd.mmap[off + offUFlags] = 0x01
 }
 
@@ -120,27 +120,27 @@ struct tcmu_cmd_entry {
 } __packed;
 */
 
-func (vbd *VirtBlockDevice) entReqIovCnt(off int) uint32 {
+func (vbd *VirBlkDev) entReqIovCnt(off int) uint32 {
 	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off + offReqIovCnt]))
 }
 
-func (vbd *VirtBlockDevice) entReqIovBidiCnt(off int) uint32 {
+func (vbd *VirBlkDev) entReqIovBidiCnt(off int) uint32 {
 	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off + offReqIovBidiCnt]))
 }
 
-func (vbd *VirtBlockDevice) entReqIovDifCnt(off int) uint32 {
+func (vbd *VirBlkDev) entReqIovDifCnt(off int) uint32 {
 	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off + offReqIovDifCnt]))
 }
 
-func (vbd *VirtBlockDevice) entReqCdbOff(off int) uint64 {
+func (vbd *VirBlkDev) entReqCdbOff(off int) uint64 {
 	return *(*uint64)(unsafe.Pointer(&vbd.mmap[off + offReqCdbOff]))
 }
 
-func (vbd *VirtBlockDevice) setEntRespSCSIStatus(off int, status byte) {
+func (vbd *VirBlkDev) setEntRespSCSIStatus(off int, status byte) {
 	vbd.mmap[off + offRespSCSIStatus] = status
 }
 
-func (vbd *VirtBlockDevice) copyEntRespSenseData(off int, data []byte) {
+func (vbd *VirBlkDev) copyEntRespSenseData(off int, data []byte) {
 	buf := vbd.mmap[off + offRespSense : off + offRespSense + SENSE_BUFFER_SIZE]
 	copy(buf, data)
 	if len(data) < SENSE_BUFFER_SIZE {
@@ -150,7 +150,7 @@ func (vbd *VirtBlockDevice) copyEntRespSenseData(off int, data []byte) {
 	}
 }
 
-func (vbd *VirtBlockDevice) entIovecN(off int, idx int) []byte {
+func (vbd *VirBlkDev) entIovecN(off int, idx int) []byte {
 	out := syscall.Iovec{}
 	p := unsafe.Pointer(&vbd.mmap[off + offReqIov0Base])
 	out = *(*syscall.Iovec)(unsafe.Pointer(uintptr(p) + uintptr(idx) * unsafe.Sizeof(out)))
@@ -158,13 +158,13 @@ func (vbd *VirtBlockDevice) entIovecN(off int, idx int) []byte {
 	return vbd.mmap[moff : moff + int(out.Len)]
 }
 
-func (vbd *VirtBlockDevice) entCdb(off int) []byte {
+func (vbd *VirBlkDev) entCdb(off int) []byte {
 	cdbStart := int(vbd.entReqCdbOff(off))
 	len := vbd.cdbLen(cdbStart)
 	return vbd.mmap[cdbStart : cdbStart + len]
 }
 
-func (vbd *VirtBlockDevice) cdbLen(cdbStart int) int {
+func (vbd *VirBlkDev) cdbLen(cdbStart int) int {
 	opcode := vbd.mmap[cdbStart]
 	// See spc-4 4.2.5.1 operation code
 	//

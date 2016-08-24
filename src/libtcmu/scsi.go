@@ -23,7 +23,7 @@ type ScsiCmd struct {
 	vecs      [][]byte
 	offset    int
 	vecoffset int
-	vbd       *VirtBlockDevice
+	vbd       *VirBlkDev
 
 	//Buffer, if provided, may be used as a scratch buffer for copying data to and from the kernel.
 	Buffer    []byte
@@ -144,14 +144,14 @@ func (cmd *ScsiCmd) Read(b []byte) (int, error) {
 }
 
 // VirtBlockDevice access the details of the SCSI device this command is handling.
-func (cmd *ScsiCmd) VirtBlockDevice() *VirtBlockDevice {
+func (cmd *ScsiCmd) VirtBlockDevice() *VirBlkDev {
 	return cmd.vbd
 }
 
 // Ok creates a SCSI Response to this command with SAM_STAT_GOOD, the common case for commands that succeed.
 func (cmd *ScsiCmd) Ok() ScsiResponse {
 	return ScsiResponse{
-		id: cmd.id,
+		id:     cmd.id,
 		status: scsi.SamStatGood,
 	}
 }
@@ -164,7 +164,7 @@ func (cmd *ScsiCmd) GetCDB(index int) byte {
 // ResponseStatus returns a ScsiResponse with the given status byte set. Ok() is equivalent to ResponseStatus(scsi.SamStatGood).
 func (cmd *ScsiCmd) ResponseStatus(status byte) ScsiResponse {
 	return ScsiResponse{
-		id: cmd.id,
+		id:     cmd.id,
 		status: status,
 	}
 }
@@ -173,8 +173,8 @@ func (cmd *ScsiCmd) ResponseStatus(status byte) ScsiResponse {
 // SCSI sense data to be written.
 func (cmd *ScsiCmd) ResponseSenseData(status byte, sense []byte) ScsiResponse {
 	return ScsiResponse{
-		id: cmd.id,
-		status: status,
+		id:          cmd.id,
+		status:      status,
 		senseBuffer: sense,
 	}
 }
@@ -182,15 +182,15 @@ func (cmd *ScsiCmd) ResponseSenseData(status byte, sense []byte) ScsiResponse {
 // NotHandled creates a response and sense data that tells the kernel this device does not emulate this command.
 func (cmd *ScsiCmd) NotHandled() ScsiResponse {
 	buf := make([]byte, SENSE_BUFFER_SIZE)
-	buf[0] = 0x70  // fixed, current
-	buf[2] = 0x5   // illegal request
+	buf[0] = 0x70 // fixed, current
+	buf[2] = 0x5  // illegal request
 	buf[7] = 0xa
 	buf[12] = 0x20 // ASC: invalid command operation code
 	buf[13] = 0x0  // ASCQ: (none)
 
 	return ScsiResponse{
-		id: cmd.id,
-		status: scsi.SamStatCheckCondition,
+		id:          cmd.id,
+		status:      scsi.SamStatCheckCondition,
 		senseBuffer: buf,
 	}
 }
@@ -198,15 +198,15 @@ func (cmd *ScsiCmd) NotHandled() ScsiResponse {
 // CheckCondition returns a response providing extra sense data. Takes a Sense Key and an Additional Sense Code.
 func (cmd *ScsiCmd) CheckCondition(key byte, asc uint16) ScsiResponse {
 	buf := make([]byte, SENSE_BUFFER_SIZE)
-	buf[0] = 0x70  // fixed, current
+	buf[0] = 0x70 // fixed, current
 	buf[2] = key
 	buf[7] = 0xa
 	buf[12] = byte(uint8((asc >> 8) & 0xff)) // high 8 bits
 	buf[13] = byte(uint8(asc & 0xff))        // low 8 bits
 
 	return ScsiResponse{
-		id: cmd.id,
-		status: scsi.SamStatCheckCondition,
+		id:          cmd.id,
+		status:      scsi.SamStatCheckCondition,
 		senseBuffer: buf,
 	}
 }
@@ -303,7 +303,7 @@ func GenerateSerial(name string) string {
 
 func GenerateTestWWN(name string) WWN {
 	return NaaWWN{
-		OUI: "000000",
+		OUI:      "000000",
 		VendorID: GenerateSerial(name),
 	}
 }
@@ -315,11 +315,11 @@ type ReadWriteAt interface {
 
 func BasicScsiHandler(rw ReadWriteAt) *ScsiHandler {
 	return &ScsiHandler{
-		HBA: 42,
-		LUN:0,
-		WWN: GenerateTestWWN("testvbd"),
+		HBA:        42,
+		LUN:        0,
+		WWN:        GenerateTestWWN("testvbd"),
 		VolumeName: "testvbd",
-		DataSizes: DataSizes{1024 * 1024 * 1024, 1024}, //1G, 1k
+		DataSizes:  DataSizes{1024 * 1024 * 1024, 1024}, //1G, 1k
 		DevReady: MultiThreadedDevReady(
 			ReadWriteAtCmdHandler{
 				RW: rw,
@@ -331,11 +331,11 @@ func BasicScsiHandler(rw ReadWriteAt) *ScsiHandler {
 
 func BasicScsiHandler2(rw ReadWriteAt) *ScsiHandler {
 	return &ScsiHandler{
-		HBA: 42,
-		LUN:1,
-		WWN: GenerateTestWWN("testvbd2"),
+		HBA:        42,
+		LUN:        1,
+		WWN:        GenerateTestWWN("testvbd2"),
 		VolumeName: "testvbd2",
-		DataSizes: DataSizes{1024 * 1024 * 1024, 1024}, //1G, 1k
+		DataSizes:  DataSizes{1024 * 1024 * 1024, 1024}, //1G, 1k
 		DevReady: MultiThreadedDevReady(
 			ReadWriteAtCmdHandler{
 				RW: rw,
@@ -382,6 +382,7 @@ func MultiThreadedDevReady(h ScsiCmdHandler, threads int) DevReadyFunc {
 						if !ok {
 							break
 						}
+
 						v.Buffer = buf
 						x, err := h.HandleCommand(v)
 						buf = v.Buffer
@@ -389,12 +390,14 @@ func MultiThreadedDevReady(h ScsiCmdHandler, threads int) DevReadyFunc {
 							return
 						}
 						out <- x
+
 					}
 					w.Done()
 				}(h, in, out, &w)
 			}
 			w.Wait()
-			close(out)
+			close(out) //cmdResp
+
 		}(h, in, out, threads)
 		return nil
 	}

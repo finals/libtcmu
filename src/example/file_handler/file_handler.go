@@ -57,7 +57,7 @@ func test2() {
 	}
 	defer d.Close()
 	fmt.Printf("go-tcmu attached to %s/%s\n", "/dev/tcmufile", fi.Name())
-
+	d.GenerateDevEntry()
 	mainClose := make(chan bool)
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
@@ -81,6 +81,6 @@ func main() {
 }
 
 func die(why string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, why + "\n", args...)
+	fmt.Fprintf(os.Stderr, why+"\n", args...)
 	os.Exit(1)
 }

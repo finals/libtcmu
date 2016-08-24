@@ -29,8 +29,8 @@ type InquiryInfo struct {
 }
 
 var defaultInquiry = InquiryInfo{
-	VendorID: "libtcmu",
-	ProductID: "TCMU Device",
+	VendorID:   "libtcmu",
+	ProductID:  "TCMU Device",
 	ProductRev: "0001",
 }
 
@@ -80,9 +80,9 @@ func FixedString(s string, length int) []byte {
 
 func EmulateStdInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
 	buf := make([]byte, 36)
-	buf[2] = 0x05  // SPC-3
-	buf[3] = 0x02  // response data format
-	buf[7] = 0x02  // CmdQue
+	buf[2] = 0x05 // SPC-3
+	buf[3] = 0x02 // response data format
+	buf[7] = 0x02 // CmdQue
 
 	vendorID := FixedString(inq.VendorID, 8)
 	copy(buf[8:16], vendorID)
@@ -91,7 +91,7 @@ func EmulateStdInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
 	productRev := FixedString(inq.ProductRev, 4)
 	copy(buf[32:36], productRev)
 
-	buf[4] = 31  // Set additional length to 31
+	buf[4] = 31 // Set additional length to 31
 	_, err := cmd.Write(buf)
 	if err != nil {
 		return ScsiResponse{}, err
@@ -119,12 +119,12 @@ func EmulateEvpdInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
 		used := 4
 		data := make([]byte, 512)
 		data[1] = 0x83
-		wwn := []byte("")  // TODO(barakmich): Report WWN. See tcmu_get_wwwn;
+		wwn := []byte("") // TODO(barakmich): Report WWN. See tcmu_get_wwwn;
 
 		// 1/3: T10 Vendor id
 		ptr := data[used:]
-		ptr[0] = 2   // code set: ASCII
-		ptr[1] = 1   // identifier: T10 vendor id
+		ptr[0] = 2 // code set: ASCII
+		ptr[1] = 1 // identifier: T10 vendor id
 		copy(ptr[4:], FixedString(inq.VendorID, 8))
 		n := copy(ptr[12:], wwn)
 		ptr[3] = byte(8 + n + 1)
@@ -132,9 +132,9 @@ func EmulateEvpdInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
 
 		// 2/3: NAA binary  // TODO(barakmich): Emulate given a real WWN
 		ptr = data[used:]
-		ptr[0] = 1   // code set: binary
-		ptr[1] = 3   // identifier: NAA
-		ptr[3] = 16  // body length for naa registered extended format
+		ptr[0] = 1  // code set: binary
+		ptr[1] = 3  // identifier: NAA
+		ptr[3] = 16 // body length for naa registered extended format
 
 		// Set type 6 and use OpenFabrics IEEE Company ID: 00 14 05
 		ptr[4] = 0x60
@@ -166,8 +166,8 @@ func EmulateEvpdInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
 
 		// 3/3: Vendor specific
 		ptr = data[used:]
-		ptr[0] = 2  // code set: ASCII
-		ptr[1] = 0  // identifier: vendor-specific
+		ptr[0] = 2 // code set: ASCII
+		ptr[1] = 0 // identifier: vendor-specific
 
 		cfgString := cmd.VirtBlockDevice().GetDevConfig()
 		n = copy(ptr[4:], []byte(cfgString))
@@ -324,7 +324,6 @@ func EmulateModeSelect(cmd *ScsiCmd, wce bool) (ScsiResponse, error) {
 func EmulateRead(cmd *ScsiCmd, r io.ReaderAt) (ScsiResponse, error) {
 	offset := cmd.LBA() * uint64(cmd.VirtBlockDevice().Sizes().BlockSize)
 	length := int(cmd.XferLen() * uint32(cmd.VirtBlockDevice().Sizes().BlockSize))
-
 	if cmd.Buffer == nil {
 		cmd.Buffer = make([]byte, length)
 	}

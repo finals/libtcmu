@@ -19,7 +19,7 @@ const (
 	SCSI_DIR = "/sys/kernel/config/target/loopback"
 )
 
-type VirtBlockDevice struct {
+type VirBlkDev struct {
 	scsi       *ScsiHandler
 	devPath    string
 	hbaDir     string
@@ -33,6 +33,9 @@ type VirtBlockDevice struct {
 	cmdChan    chan *ScsiCmd
 	respChan   chan ScsiResponse
 	cmdTail    uint32
+	pipeFds    []int
+	initialize bool
+	wait       chan struct{}
 }
 
 // WWN provides two WWNs, one for the device itself and one for the loopback device created by the kernel.
@@ -41,53 +44,74 @@ type WWN interface {
 	NexusID() string
 }
 
-func (vbd *VirtBlockDevice) GetDevConfig() string {
+func (vbd *VirBlkDev) GetDevConfig() string {
 	return fmt.Sprintf("libtcmu//%s", vbd.scsi.VolumeName)
 }
 
-func (vbd *VirtBlockDevice) Sizes() DataSizes {
+func (vbd *VirBlkDev) Sizes() DataSizes {
 	return vbd.scsi.DataSizes
 }
 
 // newVirtBlockDevice creates the virtual device based on the details in the ScsiHandler, eventually creating
 // a device under devPath (eg, "/dev") with the file name scsi.VolumeName;
 // The returned vbd represents the open device connection to the kernel, and must be closed.
-func newVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirtBlockDevice, error) {
-	vbd := &VirtBlockDevice{
-		scsi: scsi,
-		devPath: devPath,
-		uioFd: -1,
-		hbaDir: fmt.Sprintf(CONFIG_DIR_FORMAT, scsi.HBA),
+func newVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirBlkDev, error) {
+	vbd := &VirBlkDev{
+		scsi:       scsi,
+		devPath:    devPath,
+		uioFd:      -1,
+		hbaDir:     fmt.Sprintf(CONFIG_DIR_FORMAT, scsi.HBA),
+		initialize: false,
+		wait: make(chan struct{}),
 	}
 	err := vbd.Close()
 	if err != nil {
 		return nil, err
 	}
 
+	vbd.pipeFds = make([]int, 2)
+	if err := unix.Pipe(vbd.pipeFds); err != nil {
+		return nil, err
+	}
+	vbd.initialize = true
 	if err := vbd.preEnableTcmu(); err != nil {
 		return nil, err
 	}
 
-	if err := vbd.boot(); err != nil {
+	if err := vbd.start(); err != nil {
 		return nil, err
 	}
 
 	return vbd, vbd.postEnableTcmu()
 }
 
-func (vbd *VirtBlockDevice) Close() error {
+func (vbd *VirBlkDev) Close() error {
 	err := vbd.teardown()
 	if err != nil {
 		return err
 	}
 
-	if vbd.uioFd != -1 {
-		unix.Close(vbd.uioFd)
+	if vbd.initialize {
+		vbd.stopPoll()
+		vbd.closeDevice()
+
+		select {
+		case <-vbd.wait:
+		case <-time.After(30 * time.Second):
+		}
+
+		if err := unix.Close(vbd.pipeFds[0]); err != nil {
+			log.Errorln("Fail to close pipeFds[0]: ", err)
+		}
+		if err := unix.Close(vbd.pipeFds[1]); err != nil {
+			log.Errorln("Fail to close pipeFds[1]: ", err)
+		}
 	}
+
 	return nil
 }
 
-func (vbd *VirtBlockDevice) preEnableTcmu() error {
+func (vbd *VirBlkDev) preEnableTcmu() error {
 	err := writeLines(path.Join(vbd.hbaDir, vbd.scsi.VolumeName, "control"), []string{
 		fmt.Sprintf("dev_size=%d", vbd.scsi.DataSizes.VolumeSize),
 		fmt.Sprintf("dev_config=%s", vbd.GetDevConfig()),
@@ -103,15 +127,15 @@ func (vbd *VirtBlockDevice) preEnableTcmu() error {
 	})
 }
 
-func (vbd *VirtBlockDevice) getSCSIPrefixAndWnn() (string, string) {
+func (vbd *VirBlkDev) getSCSIPrefixAndWnn() (string, string) {
 	return path.Join(SCSI_DIR, vbd.scsi.WWN.DeviceID(), "tpgt_1"), vbd.scsi.WWN.NexusID()
 }
 
-func (vbd *VirtBlockDevice) getLunPath(prefix string) string {
+func (vbd *VirBlkDev) getLunPath(prefix string) string {
 	return path.Join(prefix, "lun", fmt.Sprintf("lun_%d", vbd.scsi.LUN))
 }
 
-func (vbd *VirtBlockDevice) postEnableTcmu() error {
+func (vbd *VirBlkDev) postEnableTcmu() error {
 	prefix, nexusWnn := vbd.getSCSIPrefixAndWnn()
 
 	err := writeLines(path.Join(prefix, "nexus"), []string{
@@ -130,16 +154,15 @@ func (vbd *VirtBlockDevice) postEnableTcmu() error {
 		return err
 	}
 
-	//return vbd.createDevEntry()
 	return nil
 }
 
-func (vbd *VirtBlockDevice) SetDeviceNumber(major, minor int) {
+func (vbd *VirBlkDev) SetDeviceNumber(major, minor int) {
 	vbd.major = major
 	vbd.minor = minor
 }
 
-func (vbd *VirtBlockDevice) GenerateDevEntry() error {
+func (vbd *VirBlkDev) GenerateDevEntry() error {
 	dev := filepath.Join(vbd.devPath, vbd.scsi.VolumeName)
 	log.Infof("[GenerateDevEntry] dev:%s  major:%d, minor:%d", dev, vbd.major, vbd.minor)
 	err := mknod(dev, vbd.major, vbd.minor)
@@ -148,72 +171,6 @@ func (vbd *VirtBlockDevice) GenerateDevEntry() error {
 		return err
 	}
 	return nil
-}
-
-func (vbd *VirtBlockDevice) createDevEntry() error {
-	os.MkdirAll(vbd.devPath, 0755)
-
-	dev := filepath.Join(vbd.devPath, vbd.scsi.VolumeName)
-
-	if _, err := os.Stat(dev); err == nil {
-		return fmt.Errorf("Device %s already exists, can not create", dev)
-	}
-
-	tgt, _ := vbd.getSCSIPrefixAndWnn()
-
-	address, err := ioutil.ReadFile(path.Join(tgt, "address"))
-	if err != nil {
-		return err
-	}
-
-	found := false
-	matches := []string{}
-	path := fmt.Sprintf("/sys/bus/scsi/devices/%s*/block/*/dev", strings.TrimSpace(string(address)))
-	for i := 0; i < 30; i++ {
-		var err error
-		matches, err = filepath.Glob(path)
-		if len(matches) > 0 && err == nil {
-			found = true
-			break
-		}
-
-		log.Debugf("Waiting for %s", path)
-		time.Sleep(1 * time.Second)
-	}
-
-	if !found {
-		return fmt.Errorf("Failed to find %s", path)
-	}
-
-	if len(matches) == 0 {
-		return fmt.Errorf("Failed to find %s", path)
-	}
-
-	if len(matches) > 1 {
-		return fmt.Errorf("Too many matches for %s, found %d", path, len(matches))
-	}
-
-	majorMinor, err := ioutil.ReadFile(matches[0])
-	if err != nil {
-		return err
-	}
-
-	parts := strings.Split(strings.TrimSpace(string(majorMinor)), ":")
-	if len(parts) != 2 {
-		return fmt.Errorf("Invalid major:minor string %s", string(majorMinor))
-	}
-
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return err
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return err
-	}
-
-	log.Debugf("Creating device %s %d:%d", dev, major, minor)
-	return mknod(dev, major, minor)
 }
 
 func mknod(device string, major, minor int) error {
@@ -247,7 +204,7 @@ func writeLines(target string, lines []string) error {
 	return nil
 }
 
-func (vbd *VirtBlockDevice) boot() (err error) {
+func (vbd *VirBlkDev) start() (err error) {
 	err = vbd.findDevice()
 	if err != nil {
 		return
@@ -255,12 +212,13 @@ func (vbd *VirtBlockDevice) boot() (err error) {
 
 	vbd.cmdChan = make(chan *ScsiCmd, 5)
 	vbd.respChan = make(chan ScsiResponse, 5)
-	go vbd.beginPoll()
+	go vbd.startPoll()
+	//go vbd.beginPoll()
 	vbd.scsi.DevReady(vbd.cmdChan, vbd.respChan)
 	return
 }
 
-func (vbd *VirtBlockDevice) findDevice() error {
+func (vbd *VirBlkDev) findDevice() error {
 	err := filepath.Walk("/dev", func(path string, i os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -299,7 +257,7 @@ func (vbd *VirtBlockDevice) findDevice() error {
 	return err
 }
 
-func (vbd *VirtBlockDevice) openDevice(user string, vol string, uio string) error {
+func (vbd *VirBlkDev) openDevice(user string, vol string, uio string) error {
 	var err error
 	vbd.deviceName = vol
 
@@ -319,12 +277,28 @@ func (vbd *VirtBlockDevice) openDevice(user string, vol string, uio string) erro
 
 	vbd.mmap, err = syscall.Mmap(vbd.uioFd, 0, int(vbd.mapsize), syscall.PROT_READ | syscall.PROT_WRITE, syscall.MAP_SHARED)
 	vbd.cmdTail = vbd.mbCmdTail()
-	vbd.debugPrintMb()
+	//vbd.debugPrintMb()
 
 	return err
 }
 
-func (vbd *VirtBlockDevice) debugPrintMb() {
+func (vbd *VirBlkDev) closeDevice() {
+	//if vbd.respChan != nil {
+	//	close(vbd.respChan)
+	//}
+
+	syscall.Munmap(vbd.mmap)
+
+	if vbd.uioFd != -1 {
+		unix.Close(vbd.uioFd)
+	}
+
+	if vbd.cmdChan != nil {
+		close(vbd.cmdChan)
+	}
+}
+
+func (vbd *VirBlkDev) debugPrintMb() {
 	fmt.Printf("Got a TCMU mailbox, version: %d\n", vbd.mbVersion())
 	fmt.Printf("mapsize: %d\n", vbd.mapsize)
 	fmt.Printf("mbFlags: %d\n", vbd.mbFlags())
@@ -334,7 +308,7 @@ func (vbd *VirtBlockDevice) debugPrintMb() {
 	fmt.Printf("mbCmdTail: %d\n", vbd.mbCmdTail())
 }
 
-func (vbd *VirtBlockDevice) teardown() error {
+func (vbd *VirBlkDev) teardown() error {
 	dev := filepath.Join(vbd.devPath, vbd.scsi.VolumeName)
 	tpgtPath, _ := vbd.getSCSIPrefixAndWnn()
 	lunPath := vbd.getLunPath(tpgtPath)
@@ -383,7 +357,7 @@ func removeAsync(path string, done chan <- error) {
 	done <- nil
 }
 
-func remove(path string) error {
+func remove1(path string) error {
 	done := make(chan error)
 	go removeAsync(path, done)
 	select {
@@ -392,4 +366,13 @@ func remove(path string) error {
 	case <-time.After(30 * time.Second):
 		return fmt.Errorf("Timeout trying to delete %s.", path)
 	}
+}
+
+func remove(path string) error {
+	//fmt.Printf("Removing: %s\n", path)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("Unable to remove: %v\n", path)
+	}
+	//fmt.Printf("Removed: %s\n", path)
+	return nil
 }

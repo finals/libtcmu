@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (vbd *VirtBlockDevice) beginPoll() {
+func (vbd *VirBlkDev) beginPoll() {
 	// Entry point for the goroutine.
 	go vbd.recvResponse()
 
@@ -34,9 +34,77 @@ func (vbd *VirtBlockDevice) beginPoll() {
 		}
 	}
 	close(vbd.cmdChan)
+	log.Infof("beginPoll exit")
 }
 
-func (vbd *VirtBlockDevice) recvResponse() {
+func (vbd *VirBlkDev) startPoll() {
+	// Entry point for the goroutine.
+	go vbd.recvResponse()
+
+	buf := make([]byte, 4)
+	for {
+		pfd := []unix.PollFd{
+			{
+				Fd: int32(vbd.uioFd),
+				Events: unix.POLLIN,
+				Revents: 0,
+			},
+			{
+				Fd: int32(vbd.pipeFds[0]),
+				Events:unix.POLLIN,
+				Revents: 0,
+			},
+		}
+
+		_, err := unix.Poll(pfd, -1)
+		if err != nil {
+			fmt.Println("Poll command failed: ", err)
+			break
+		}
+		if pfd[1].Revents == unix.POLLIN {
+			fmt.Println("Poll command receive finish signal")
+			vbd.wait <- struct{}{}
+			return
+		}
+
+		if pfd[0].Revents != 0 && pfd[0].Events != unix.POLLIN {
+			fmt.Println("Poll received unexpect event: ", pfd[0].Revents)
+			continue
+		}
+
+		var n int
+		n, err = unix.Read(vbd.uioFd, buf)
+		if n == -1 && err != nil {
+			fmt.Println(err.Error())
+			break
+		}
+		for {
+			cmd, err := vbd.getNextCommand()
+			if err != nil {
+				fmt.Println("error getting next command: %s", err.Error())
+				break
+			}
+			if cmd == nil {
+				//fmt.Println("cmd == nil uioFd: ", vbd.uioFd)
+				break
+			}
+
+			vbd.cmdChan <- cmd
+		}
+	}
+	//close(vbd.cmdChan)
+	//log.Infof("beginPoll exit")
+}
+
+func (vbd *VirBlkDev) stopPoll() {
+	if vbd.initialize {
+		if _, err := unix.Write(vbd.pipeFds[1], []byte{0}); err != nil {
+			log.Errorln("Fail to notify poll for finishing: ", err)
+		}
+	}
+}
+
+func (vbd *VirBlkDev) recvResponse() {
 	var n int
 	buf := make([]byte, 4)
 	for resp := range vbd.respChan {
@@ -54,7 +122,7 @@ func (vbd *VirtBlockDevice) recvResponse() {
 	}
 }
 
-func (vbd *VirtBlockDevice)  completeCommand(resp ScsiResponse) error {
+func (vbd *VirBlkDev) completeCommand(resp ScsiResponse) error {
 	off := vbd.tailEntryOff()
 	for vbd.entHdrOp(off) != tcmuOpCmd {
 		vbd.mbSetTail((vbd.mbCmdTail() + uint32(vbd.entHdrGetLen(off))) % vbd.mbCmdrSize())
@@ -71,10 +139,10 @@ func (vbd *VirtBlockDevice)  completeCommand(resp ScsiResponse) error {
 	return nil
 }
 
-func (vbd *VirtBlockDevice) getNextCommand() (*ScsiCmd, error) {
-	//d.debugPrintMb()
-	//fmt.Printf("nextEntryOff: %d\n", d.nextEntryOff())
-	//fmt.Printf("headEntryOff: %d\n", d.headEntryOff())
+func (vbd *VirBlkDev) getNextCommand() (*ScsiCmd, error) {
+	//vbd.debugPrintMb()
+	//fmt.Printf("nextEntryOff: %d\n", vbd.nextEntryOff())
+	//fmt.Printf("headEntryOff: %d\n", vbd.headEntryOff())
 	for vbd.nextEntryOff() != vbd.headEntryOff() {
 		off := vbd.nextEntryOff()
 		if vbd.entHdrOp(off) == tcmuOpPad {
@@ -82,7 +150,7 @@ func (vbd *VirtBlockDevice) getNextCommand() (*ScsiCmd, error) {
 		} else if vbd.entHdrOp(off) == tcmuOpCmd {
 			//d.printEnt(off)
 			out := &ScsiCmd{
-				id:     vbd.entCmdId(off),
+				id:  vbd.entCmdId(off),
 				vbd: vbd,
 			}
 			out.cdb = vbd.entCdb(off)
@@ -101,7 +169,7 @@ func (vbd *VirtBlockDevice) getNextCommand() (*ScsiCmd, error) {
 	return nil, nil
 }
 
-func (vbd *VirtBlockDevice) printEnt(off int) {
+func (vbd *VirBlkDev) printEnt(off int) {
 	for i, x := range vbd.mmap[off : off + vbd.entHdrGetLen(off)] {
 		fmt.Printf("0x%02x ", x)
 		if i % 16 == 15 {
@@ -110,14 +178,14 @@ func (vbd *VirtBlockDevice) printEnt(off int) {
 	}
 }
 
-func (vbd *VirtBlockDevice)nextEntryOff() int {
+func (vbd *VirBlkDev) nextEntryOff() int {
 	return int(vbd.cmdTail + vbd.mbCmdrOffset())
 }
 
-func (vbd *VirtBlockDevice) headEntryOff() int {
+func (vbd *VirBlkDev) headEntryOff() int {
 	return int(vbd.mbCmdHead() + vbd.mbCmdrOffset())
 }
 
-func (vbd *VirtBlockDevice) tailEntryOff() int {
+func (vbd *VirBlkDev) tailEntryOff() int {
 	return int(vbd.mbCmdTail() + vbd.mbCmdrOffset())
 }
