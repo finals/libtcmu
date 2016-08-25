@@ -74,7 +74,7 @@ func FixedString(s string, length int) []byte {
 	if l >= length {
 		return p[:length]
 	}
-	sp := bytes.Repeat([]byte{' '}, length - l)
+	sp := bytes.Repeat([]byte{' '}, length-l)
 	return append(p, sp...)
 }
 
@@ -176,7 +176,7 @@ func EmulateEvpdInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
 		used += n + 1 + 4
 
 		order := binary.BigEndian
-		order.PutUint16(data[2:4], uint16(used - 4))
+		order.PutUint16(data[2:4], uint16(used-4))
 
 		cmd.Write(data[:used])
 		return cmd.Ok(), nil
@@ -200,7 +200,7 @@ func EmulateReadCapacity16(cmd *ScsiCmd) (ScsiResponse, error) {
 	buf := make([]byte, 32)
 	order := binary.BigEndian
 	// This is in LBAs, and the "index of the last LBA", so minus 1. Friggin spec.
-	order.PutUint64(buf[0:8], uint64(cmd.VirtBlockDevice().Sizes().VolumeSize / cmd.VirtBlockDevice().Sizes().BlockSize) - 1)
+	order.PutUint64(buf[0:8], uint64(cmd.VirtBlockDevice().Sizes().VolumeSize/cmd.VirtBlockDevice().Sizes().BlockSize)-1)
 	// This is in BlockSize
 	order.PutUint32(buf[8:12], uint32(cmd.VirtBlockDevice().Sizes().BlockSize))
 	// All the rest is 0
@@ -257,7 +257,7 @@ func EmulateModeSense(cmd *ScsiCmd, wce bool) (ScsiResponse, error) {
 		// MODE_SENSE_10
 		hdr = make([]byte, 8)
 		order := binary.BigEndian
-		order.PutUint16(hdr, uint16(len(pgdata) + 6))
+		order.PutUint16(hdr, uint16(len(pgdata)+6))
 		hdr[2] = 0x00 // Device type
 		hdr[3] = dsp
 	}
@@ -295,7 +295,7 @@ func EmulateModeSelect(cmd *ScsiCmd, wce bool) (ScsiResponse, error) {
 	}
 
 	cdbone := cmd.GetCDB(1)
-	if cdbone & 0x10 == 0 || cdbone & 0x01 != 0 {
+	if cdbone&0x10 == 0 || cdbone&0x01 != 0 {
 		return cmd.IllegalRequest(), nil
 	}
 

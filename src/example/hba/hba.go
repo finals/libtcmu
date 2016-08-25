@@ -7,8 +7,8 @@ import (
 
 	"libtcmu"
 	//"time"
-	"syscall"
 	"runtime"
+	"syscall"
 	//"time"
 )
 
@@ -155,7 +155,7 @@ func main() {
 		}
 	}()
 
-	for i := 0; i < 30000; i++ {
+	for i := 0; i < 160000; i++ {
 		fmt.Printf("Times: %d\n", i)
 		Create(filename, hba)
 		Close(filename, hba)

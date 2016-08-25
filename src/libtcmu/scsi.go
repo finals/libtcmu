@@ -26,7 +26,7 @@ type ScsiCmd struct {
 	vbd       *VirBlkDev
 
 	//Buffer, if provided, may be used as a scratch buffer for copying data to and from the kernel.
-	Buffer    []byte
+	Buffer []byte
 }
 
 // A ScsiResponse is generated from methods on ScscCmd.
@@ -238,17 +238,17 @@ type ScsiHandler struct {
 	// The volume name and resultant device name.
 	VolumeName string
 	// The size of the device and the blocksize for the device.
-	DataSizes  DataSizes
+	DataSizes DataSizes
 	// The loopback HBA for the emulated SCSI device
-	HBA        int
+	HBA int
 	// The LUN for the emulated HBA
-	LUN        int
+	LUN int
 	// The Scsi World Wide Identifer for the device
-	WWN        WWN
+	WWN WWN
 	// Called once the device is ready. Should spawn a goroutine (or several)
 	// to handle commands coming in the first channel, and send their associated
 	// responses down the second channel, ordering optional.
-	DevReady   DevReadyFunc
+	DevReady DevReadyFunc
 }
 
 // NaaWWN represents the World Wide Name of the SCSI device we are emulating, using the
@@ -256,10 +256,10 @@ type ScsiHandler struct {
 type NaaWWN struct {
 	// OUI is the first three bytes (six hex digits), in ASCII, of your
 	// IEEE Organizationally Unique Identifier, eg, "05abcd".
-	OUI         string
+	OUI string
 	// The VendorID is the first four bytes(eight hex digits), in ASCII, of
 	// the device's vendor-specific ID (perhaps a serial number), eg, "2416c05f".
-	VendorID    string
+	VendorID string
 	// The VendorIDExt is an optional eight more bytes (16 hex digits) in the same format
 	// as the above, if necessary.
 	VendorIDExt string
@@ -349,7 +349,7 @@ func SingleThreadedDevReady(h ScsiCmdHandler) DevReadyFunc {
 	return func(in chan *ScsiCmd, out chan ScsiResponse) error {
 		go func(h ScsiCmdHandler, in chan *ScsiCmd, out chan ScsiResponse) {
 			// Use io.Copy's trick
-			buf := make([]byte, 32 * 1024)
+			buf := make([]byte, 32*1024)
 			for {
 				v, ok := <-in
 				if !ok {
@@ -376,7 +376,7 @@ func MultiThreadedDevReady(h ScsiCmdHandler, threads int) DevReadyFunc {
 			w.Add(threads)
 			for i := 0; i < threads; i++ {
 				go func(h ScsiCmdHandler, in chan *ScsiCmd, out chan ScsiResponse, w *sync.WaitGroup) {
-					buf := make([]byte, 32 * 1024)
+					buf := make([]byte, 32*1024)
 					for {
 						v, ok := <-in
 						if !ok {

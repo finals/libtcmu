@@ -45,13 +45,13 @@ func (vbd *VirBlkDev) startPoll() {
 	for {
 		pfd := []unix.PollFd{
 			{
-				Fd: int32(vbd.uioFd),
-				Events: unix.POLLIN,
+				Fd:      int32(vbd.uioFd),
+				Events:  unix.POLLIN,
 				Revents: 0,
 			},
 			{
-				Fd: int32(vbd.pipeFds[0]),
-				Events:unix.POLLIN,
+				Fd:      int32(vbd.pipeFds[0]),
+				Events:  unix.POLLIN,
 				Revents: 0,
 			},
 		}
@@ -170,9 +170,9 @@ func (vbd *VirBlkDev) getNextCommand() (*ScsiCmd, error) {
 }
 
 func (vbd *VirBlkDev) printEnt(off int) {
-	for i, x := range vbd.mmap[off : off + vbd.entHdrGetLen(off)] {
+	for i, x := range vbd.mmap[off : off+vbd.entHdrGetLen(off)] {
 		fmt.Printf("0x%02x ", x)
-		if i % 16 == 15 {
+		if i%16 == 15 {
 			fmt.Printf("\n")
 		}
 	}

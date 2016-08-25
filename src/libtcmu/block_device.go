@@ -16,7 +16,7 @@ import (
 
 const (
 	CONFIG_DIR_FORMAT = "/sys/kernel/config/target/core/user_%d"
-	SCSI_DIR = "/sys/kernel/config/target/loopback"
+	SCSI_DIR          = "/sys/kernel/config/target/loopback"
 )
 
 type VirBlkDev struct {
@@ -62,7 +62,7 @@ func newVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirBlkDev, error) {
 		uioFd:      -1,
 		hbaDir:     fmt.Sprintf(CONFIG_DIR_FORMAT, scsi.HBA),
 		initialize: false,
-		wait: make(chan struct{}),
+		wait:       make(chan struct{}),
 	}
 	err := vbd.Close()
 	if err != nil {
@@ -261,7 +261,7 @@ func (vbd *VirBlkDev) openDevice(user string, vol string, uio string) error {
 	var err error
 	vbd.deviceName = vol
 
-	vbd.uioFd, err = syscall.Open(fmt.Sprintf("/dev/%s", uio), syscall.O_RDWR | syscall.O_CLOEXEC, 0600)
+	vbd.uioFd, err = syscall.Open(fmt.Sprintf("/dev/%s", uio), syscall.O_RDWR|syscall.O_CLOEXEC, 0600)
 	if err != nil {
 		return err
 	}
@@ -275,7 +275,7 @@ func (vbd *VirBlkDev) openDevice(user string, vol string, uio string) error {
 		return err
 	}
 
-	vbd.mmap, err = syscall.Mmap(vbd.uioFd, 0, int(vbd.mapsize), syscall.PROT_READ | syscall.PROT_WRITE, syscall.MAP_SHARED)
+	vbd.mmap, err = syscall.Mmap(vbd.uioFd, 0, int(vbd.mapsize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
 	vbd.cmdTail = vbd.mbCmdTail()
 	//vbd.debugPrintMb()
 
@@ -347,7 +347,7 @@ func (vbd *VirBlkDev) teardown() error {
 	return nil
 }
 
-func removeAsync(path string, done chan <- error) {
+func removeAsync(path string, done chan<- error) {
 	log.Debugf("Removing: %s", path)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		log.Debugf("Unable to remove: %v", path)

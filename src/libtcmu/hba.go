@@ -9,6 +9,7 @@ import (
 
 	"github.com/jochenvg/go-udev"
 	//"util/fs"
+	"io/ioutil"
 	"path/filepath"
 )
 
@@ -122,8 +123,9 @@ func (h *HBA) CreateDeviceComplete(completion chan int) {
 			if "add" != dev.Action() {
 				continue
 			}
-		//log.Infof("[CreateDeviceComplete] ID_MODEL: %s", dev.PropertyValue("ID_MODEL"))
-			if !strings.Contains(dev.PropertyValue("ID_MODEL"), "TCMU_Device") {
+
+			res, err := IsTcmuDevice(dev.Devnode())
+			if res == false || err != nil {
 				log.Errorf("[CreateDeviceComplete] udev report not tcmu device, wait for:%s", dev.Devnode())
 				continue
 			}
@@ -184,10 +186,13 @@ func (h *HBA) monitorDeviceEvent() {
 				continue
 			}
 		//log.Infof("[monitorDeviceEvent] ID_MODEL: %s", dev.PropertyValue("ID_MODEL"))
-			if !strings.Contains(dev.PropertyValue("ID_MODEL"), "TCMU_Device") {
+
+			res, err := IsTcmuDevice(dev.Devnode())
+			if res == false || err != nil {
 				log.Errorf("[monitorDeviceEvent] udev report not tcmu device, wait for:%s", dev.Devnode())
 				continue
 			}
+
 		//log.Infof("[monitorDeviceEvent] dev: %s", dev.Devnode())
 			h.devEvent <- dev
 		//log.Debugf("[monitorDeviceEvent] receive event:%s", dev.Action())
@@ -197,6 +202,16 @@ func (h *HBA) monitorDeviceEvent() {
 		}
 
 	}
+}
+
+func IsTcmuDevice(bd string) (bool, error) {
+
+	blockdevice := strings.TrimLeft(bd, "/dev/")
+	buf, err := ioutil.ReadFile("/sys/block/" + blockdevice + "/device/model")
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(string(buf), "TCMU"), nil
 }
 
 func IsDirExists(path string) bool {
