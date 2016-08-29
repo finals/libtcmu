@@ -78,14 +78,15 @@ func test2(hba *libtcmu.HBA) {
 }
 
 func Create(name string, hba *libtcmu.HBA) {
-	f, err := os.OpenFile(name, os.O_RDWR, 0700)
+	var err error
+	fvol1, err = os.OpenFile(name, os.O_RDWR, 0700)
 	if err != nil {
 		die("couldn't open: %v", err)
 	}
 	//defer fvol1.Close()
-	fi, _ := f.Stat()
+	fi, _ := fvol1.Stat()
 
-	_, err = hba.CreateDevice(fi.Name(), 1073741824, 1024, f, 2)
+	_, err = hba.CreateDevice(fi.Name(), 4 * 1024 *1024 *1024, 1024, fvol1, 2)
 	if err != nil {
 		die("couldn't tcmu: %v", err)
 	}
@@ -93,6 +94,8 @@ func Create(name string, hba *libtcmu.HBA) {
 
 func Close(name string, hba *libtcmu.HBA) {
 	hba.RemoveDevice(name)
+	fvol1.Close()
+	fvol1 = nil
 }
 
 func mainRoutine() {
@@ -114,7 +117,7 @@ func mainRoutine() {
 	<-mainClose
 }
 
-func mainOnce() {
+func CreateOne() {
 	hba, _ := libtcmu.NewHBA("tcomet")
 	hba.Start()
 	filename := "vol11"
@@ -135,7 +138,7 @@ func mainOnce() {
 	<-mainClose
 }
 
-func main() {
+func CreateMany() {
 	hba, _ := libtcmu.NewHBA("tcomet")
 	hba.Start()
 	filename := "vol11"
@@ -155,7 +158,7 @@ func main() {
 		}
 	}()
 
-	for i := 0; i < 160000; i++ {
+	for i := 0; i < 1000; i++ {
 		fmt.Printf("Times: %d\n", i)
 		Create(filename, hba)
 		Close(filename, hba)
@@ -167,4 +170,23 @@ func main() {
 func die(why string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, why + "\n", args...)
 	os.Exit(1)
+}
+
+
+func main() {
+    if len(os.Args) < 2 {
+	    return
+    }
+
+	if os.Args[1] == "once" {
+		CreateOne()
+	}
+
+	if os.Args[1] == "many" {
+		CreateMany()
+	}
+
+	if os.Args[1] == "clear" && len(os.Args) == 3 {
+
+	}
 }

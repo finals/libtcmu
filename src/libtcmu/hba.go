@@ -10,15 +10,16 @@ import (
 	"github.com/jochenvg/go-udev"
 	//"util/fs"
 	"io/ioutil"
-	"path/filepath"
 )
 
 const (
 	CREATE_TIMEOUT = 10 * time.Second
 
 	SUCCESS = 0
-	ERROR = 1
+	ERROR   = 1
 	TIMEOUT = 2
+
+	DEV_DIR_NAME = "comet"
 )
 
 var (
@@ -69,6 +70,10 @@ func (h *HBA) Start() error {
 }
 
 func (h *HBA) Stop() error {
+	for name, _ := range h.vbds {
+		h.RemoveDevice(name)
+	}
+
 	close(h.stopC)
 	return nil
 }
@@ -78,7 +83,7 @@ func (h *HBA) CreateDevice(name string, size int64, sectorSize int64, rw ReadWri
 	//defer h.Unlock()
 
 	if h.vbdInitializing != nil {
-		return nil, fmt.Errorf("Error: other vbd initializing, try again")
+		return nil, fmt.Errorf("other vbd initializing, try again")
 	}
 
 	handler := &ScsiHandler{
@@ -87,12 +92,15 @@ func (h *HBA) CreateDevice(name string, size int64, sectorSize int64, rw ReadWri
 		VolumeName: name,
 		WWN:        GenerateTestWWN(name),
 		DataSizes:  DataSizes{size, sectorSize},
-		DevReady: MultiThreadedDevReady(
-			ReadWriteAtCmdHandler{
-				RW: rw,
-			},
-			threads,
-		),
+		Handler:    ReadWriteAtCmdHandler{RW: rw},
+		/*
+			DevReady: MultiThreadedDevReady(
+				ReadWriteAtCmdHandler{
+					RW: rw,
+				},
+				threads,
+			),
+		*/
 	}
 	h.lunid++
 
@@ -101,14 +109,14 @@ func (h *HBA) CreateDevice(name string, size int64, sectorSize int64, rw ReadWri
 	vbd, err := newVirtBlockDevice(h.devPath, handler)
 	if err != nil {
 		log.Errorf("[CreateDevice] devPath:%s error:%s", h.devPath, err.Error())
-		return nil, err
+		return nil, fmt.Errorf(err.Error())
 	}
 	h.vbdInitializing = vbd
 	result := <-completion
 	if result != SUCCESS {
 		vbd.Close()
 		log.Errorf("[CreateDevice] devPath:%s, wait to generate device error:%d", result)
-		return nil, fmt.Errorf("wait to generate device error:%d", result)
+		return nil, fmt.Errorf(err.Error())
 	}
 	return vbd, nil
 }
@@ -119,22 +127,22 @@ func (h *HBA) CreateDeviceComplete(completion chan int) {
 	for {
 		select {
 		case dev := <-h.devEvent:
-		//log.Infof("[CreateDeviceComplete] receive event")
+			//log.Infof("[CreateDeviceComplete] receive event")
 			if "add" != dev.Action() {
 				continue
 			}
 
 			res, err := IsTcmuDevice(dev.Devnode())
 			if res == false || err != nil {
-				log.Errorf("[CreateDeviceComplete] udev report not tcmu device, wait for:%s", dev.Devnode())
+				log.Errorf("[CreateDeviceComplete] udev report not tcmu device:%s, waiting", dev.Devnode())
 				continue
 			}
 
 			if h.vbdInitializing != nil {
 				dnum := dev.Devnum()
-				//log.Infof("[CreateDeviceComplete] major:%d, minor:%d", dnum.Major(), dnum.Minor())
+
 				h.vbdInitializing.SetDeviceNumber(dnum.Major(), dnum.Minor())
-				err := h.vbdInitializing.GenerateDevEntry()
+				err := h.vbdInitializing.GenerateDevice()
 				h.Unlock()
 				if err != nil {
 					log.Errorf("[CreateDeviceComplete] Generate virtdisk device error:%s", err.Error())
@@ -156,13 +164,21 @@ func (h *HBA) CreateDeviceComplete(completion chan int) {
 	}
 }
 
-func (h *HBA) RemoveDevice(name string) {
+func (h *HBA) RemoveDevice(name string) error {
 	vbd, exist := h.vbds[name]
 	if !exist {
-		return
+		return nil
 	}
-	remove(filepath.Join(vbd.devPath, vbd.scsi.VolumeName))
+
+	if vbd.IsBusy() {
+		log.Infof("[RemoveDevice] vbd busy name:%s", name)
+		return fmt.Errorf("get mount info error")
+	}
+
+	remove(vbd.devPath)
 	vbd.Close()
+	delete(h.vbds, name)
+	return nil
 }
 
 func (h *HBA) monitorDeviceEvent() {
@@ -182,10 +198,15 @@ func (h *HBA) monitorDeviceEvent() {
 	for {
 		select {
 		case dev := <-ch:
+			// avoid strace process cause udev panic
+			if dev == nil {
+				ch, _ = m.DeviceChan(done)
+				continue
+			}
+
 			if "add" != dev.Action() {
 				continue
 			}
-		//log.Infof("[monitorDeviceEvent] ID_MODEL: %s", dev.PropertyValue("ID_MODEL"))
 
 			res, err := IsTcmuDevice(dev.Devnode())
 			if res == false || err != nil {
@@ -193,7 +214,7 @@ func (h *HBA) monitorDeviceEvent() {
 				continue
 			}
 
-		//log.Infof("[monitorDeviceEvent] dev: %s", dev.Devnode())
+			//log.Infof("[monitorDeviceEvent] dev: %s", dev.Devnode())
 			h.devEvent <- dev
 		//log.Debugf("[monitorDeviceEvent] receive event:%s", dev.Action())
 		case <-h.stopC:
@@ -205,7 +226,6 @@ func (h *HBA) monitorDeviceEvent() {
 }
 
 func IsTcmuDevice(bd string) (bool, error) {
-
 	blockdevice := strings.TrimLeft(bd, "/dev/")
 	buf, err := ioutil.ReadFile("/sys/block/" + blockdevice + "/device/model")
 	if err != nil {

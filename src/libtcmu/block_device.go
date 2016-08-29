@@ -12,14 +12,18 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"github.com/docker/docker/pkg/mount"
+	"sync"
 )
 
 const (
 	CONFIG_DIR_FORMAT = "/sys/kernel/config/target/core/user_%d"
-	SCSI_DIR          = "/sys/kernel/config/target/loopback"
+	SCSI_DIR = "/sys/kernel/config/target/loopback"
 )
 
 type VirBlkDev struct {
+	sync.Mutex
+
 	scsi       *ScsiHandler
 	devPath    string
 	hbaDir     string
@@ -30,11 +34,12 @@ type VirBlkDev struct {
 	uioFd      int
 	mapsize    uint64
 	mmap       []byte
-	cmdChan    chan *ScsiCmd
-	respChan   chan ScsiResponse
+	//cmdChan    chan *ScsiCmd
+	//respChan   chan ScsiResponse
 	cmdTail    uint32
 	pipeFds    []int
 	initialize bool
+	shut       chan struct{}
 	wait       chan struct{}
 }
 
@@ -52,16 +57,43 @@ func (vbd *VirBlkDev) Sizes() DataSizes {
 	return vbd.scsi.DataSizes
 }
 
+func (vbd *VirBlkDev) Capacity() int64 {
+	return vbd.scsi.DataSizes.VolumeSize
+}
+
+func (vbd *VirBlkDev) GetDevice() string {
+	return vbd.devPath
+}
+
+func (vbd *VirBlkDev) Name() string {
+	return vbd.scsi.VolumeName
+}
+
+func (vbd *VirBlkDev) IsBusy() bool {
+	minfo, err := mount.GetMounts()
+	if err != nil {
+		return true
+	}
+	for _, info := range minfo {
+		if info.Major == vbd.major && info.Minor == vbd.minor {
+			return true
+		}
+	}
+
+	return false
+}
+
 // newVirtBlockDevice creates the virtual device based on the details in the ScsiHandler, eventually creating
 // a device under devPath (eg, "/dev") with the file name scsi.VolumeName;
 // The returned vbd represents the open device connection to the kernel, and must be closed.
 func newVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirBlkDev, error) {
 	vbd := &VirBlkDev{
 		scsi:       scsi,
-		devPath:    devPath,
+		devPath:    filepath.Join(devPath, scsi.VolumeName),
 		uioFd:      -1,
 		hbaDir:     fmt.Sprintf(CONFIG_DIR_FORMAT, scsi.HBA),
 		initialize: false,
+		shut:       make(chan struct{}),
 		wait:       make(chan struct{}),
 	}
 	err := vbd.Close()
@@ -71,10 +103,12 @@ func newVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirBlkDev, error) {
 
 	vbd.pipeFds = make([]int, 2)
 	if err := unix.Pipe(vbd.pipeFds); err != nil {
+		log.Errorf("[newVirtBlockDevice] vbd:%s create pipe error:%s", vbd.devPath, err)
 		return nil, err
 	}
 	vbd.initialize = true
 	if err := vbd.preEnableTcmu(); err != nil {
+		log.Errorf("[newVirtBlockDevice] vbd:%s preEnableTcmu error:%s", vbd.devPath, err.Error())
 		return nil, err
 	}
 
@@ -97,14 +131,15 @@ func (vbd *VirBlkDev) Close() error {
 
 		select {
 		case <-vbd.wait:
+			break
 		case <-time.After(30 * time.Second):
 		}
 
 		if err := unix.Close(vbd.pipeFds[0]); err != nil {
-			log.Errorln("Fail to close pipeFds[0]: ", err)
+			log.Errorf("[Close] vbd:%s Fail to close pipeFds[0]: %s", vbd.devPath, err)
 		}
 		if err := unix.Close(vbd.pipeFds[1]); err != nil {
-			log.Errorln("Fail to close pipeFds[1]: ", err)
+			log.Errorf("[Close] vbd:%s Fail to close pipeFds[1]: %s", vbd.devPath, err)
 		}
 	}
 
@@ -162,12 +197,12 @@ func (vbd *VirBlkDev) SetDeviceNumber(major, minor int) {
 	vbd.minor = minor
 }
 
-func (vbd *VirBlkDev) GenerateDevEntry() error {
-	dev := filepath.Join(vbd.devPath, vbd.scsi.VolumeName)
-	log.Infof("[GenerateDevEntry] dev:%s  major:%d, minor:%d", dev, vbd.major, vbd.minor)
-	err := mknod(dev, vbd.major, vbd.minor)
+func (vbd *VirBlkDev) GenerateDevice() error {
+	//dev := filepath.Join(vbd.devPath, vbd.scsi.VolumeName)
+	//log.Infof("[GenerateDevEntry] dev:%s  major:%d, minor:%d", vbd.devPath, vbd.major, vbd.minor)
+	err := mknod(vbd.devPath, vbd.major, vbd.minor)
 	if err != nil {
-		log.Infof("[GenerateDevEntry] error:%s", err.Error())
+		log.Infof("[GenerateDevEntry] vbd:%s error:%s", vbd.devPath, err.Error())
 		return err
 	}
 	return nil
@@ -184,7 +219,7 @@ func mknod(device string, major, minor int) error {
 func writeLines(target string, lines []string) error {
 	dir := path.Dir(target)
 	if stat, err := os.Stat(dir); os.IsNotExist(err) {
-		log.Debugf("Creating directory: %s", dir)
+		//log.Debugf("Creating directory: %s", dir)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
@@ -194,9 +229,9 @@ func writeLines(target string, lines []string) error {
 
 	for _, line := range lines {
 		content := []byte(line + "\n")
-		log.Debugf("Setting %s: %s", target, line)
+		//log.Debugf("Setting %s: %s", target, line)
 		if err := ioutil.WriteFile(target, content, 0755); err != nil {
-			log.Debugf("Failed to write %s to %s: %v", line, target, err)
+			//log.Debugf("Failed to write %s to %s: %v", line, target, err)
 			return err
 		}
 	}
@@ -210,11 +245,11 @@ func (vbd *VirBlkDev) start() (err error) {
 		return
 	}
 
-	vbd.cmdChan = make(chan *ScsiCmd, 5)
-	vbd.respChan = make(chan ScsiResponse, 5)
+	//vbd.cmdChan = make(chan *ScsiCmd, 128)
+	//vbd.respChan = make(chan ScsiResponse, 128)
 	go vbd.startPoll()
 	//go vbd.beginPoll()
-	vbd.scsi.DevReady(vbd.cmdChan, vbd.respChan)
+	//vbd.scsi.DevReady(vbd.cmdChan, vbd.respChan)
 	return
 }
 
@@ -261,7 +296,7 @@ func (vbd *VirBlkDev) openDevice(user string, vol string, uio string) error {
 	var err error
 	vbd.deviceName = vol
 
-	vbd.uioFd, err = syscall.Open(fmt.Sprintf("/dev/%s", uio), syscall.O_RDWR|syscall.O_CLOEXEC, 0600)
+	vbd.uioFd, err = syscall.Open(fmt.Sprintf("/dev/%s", uio), syscall.O_RDWR | syscall.O_NONBLOCK | syscall.O_CLOEXEC, 0600)
 	if err != nil {
 		return err
 	}
@@ -275,7 +310,7 @@ func (vbd *VirBlkDev) openDevice(user string, vol string, uio string) error {
 		return err
 	}
 
-	vbd.mmap, err = syscall.Mmap(vbd.uioFd, 0, int(vbd.mapsize), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	vbd.mmap, err = syscall.Mmap(vbd.uioFd, 0, int(vbd.mapsize), syscall.PROT_READ | syscall.PROT_WRITE, syscall.MAP_SHARED)
 	vbd.cmdTail = vbd.mbCmdTail()
 	//vbd.debugPrintMb()
 
@@ -283,19 +318,19 @@ func (vbd *VirBlkDev) openDevice(user string, vol string, uio string) error {
 }
 
 func (vbd *VirBlkDev) closeDevice() {
-	//if vbd.respChan != nil {
-	//	close(vbd.respChan)
-	//}
-
 	syscall.Munmap(vbd.mmap)
 
 	if vbd.uioFd != -1 {
 		unix.Close(vbd.uioFd)
 	}
 
-	if vbd.cmdChan != nil {
-		close(vbd.cmdChan)
-	}
+	//if vbd.cmdChan != nil {
+	//	close(vbd.cmdChan)
+	//}
+
+	//if _, isClose := <-vbd.respChan; !isClose {
+	//	close(vbd.respChan)
+	//}
 }
 
 func (vbd *VirBlkDev) debugPrintMb() {
@@ -309,7 +344,7 @@ func (vbd *VirBlkDev) debugPrintMb() {
 }
 
 func (vbd *VirBlkDev) teardown() error {
-	dev := filepath.Join(vbd.devPath, vbd.scsi.VolumeName)
+	//dev := filepath.Join(vbd.devPath, vbd.scsi.VolumeName)
 	tpgtPath, _ := vbd.getSCSIPrefixAndWnn()
 	lunPath := vbd.getLunPath(tpgtPath)
 
@@ -337,8 +372,8 @@ func (vbd *VirBlkDev) teardown() error {
 	}
 
 	// Should be cleaned up automatically, but if it isn't remove it
-	if _, err := os.Stat(dev); err == nil {
-		err := remove(dev)
+	if _, err := os.Stat(vbd.devPath); err == nil {
+		err := remove(vbd.devPath)
 		if err != nil {
 			return err
 		}
@@ -347,13 +382,13 @@ func (vbd *VirBlkDev) teardown() error {
 	return nil
 }
 
-func removeAsync(path string, done chan<- error) {
-	log.Debugf("Removing: %s", path)
+func removeAsync(path string, done chan <- error) {
+	//log.Debugf("Removing: %s", path)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		log.Debugf("Unable to remove: %v", path)
 		done <- err
 	}
-	log.Debugf("Removed: %s", path)
+	//log.Debugf("Removed: %s", path)
 	done <- nil
 }
 
@@ -371,7 +406,7 @@ func remove1(path string) error {
 func remove(path string) error {
 	//fmt.Printf("Removing: %s\n", path)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		fmt.Printf("Unable to remove: %v\n", path)
+		log.Warnf("[remove] Unable to remove: %s", path)
 	}
 	//fmt.Printf("Removed: %s\n", path)
 	return nil

@@ -8,6 +8,11 @@ import (
 	"libtcmu/scsi"
 )
 
+type ReadWriteAt interface {
+	io.ReaderAt
+	io.WriterAt
+}
+
 // ScsiCmdHandler is a simple request/response handler for SCSI commands commint to TCMU
 // A SCSI error is reported as an SCSIResponse with an error bit set, while returning a Go error is for flagrant,
 // process-ending errors (OOM, perhaps)
@@ -36,6 +41,10 @@ var defaultInquiry = InquiryInfo{
 
 func (h ReadWriteAtCmdHandler) HandleCommand(cmd *ScsiCmd) (ScsiResponse, error) {
 	switch cmd.Command() {
+	case scsi.Read6, scsi.Read10, scsi.Read12, scsi.Read16:
+		return EmulateRead(cmd, h.RW)
+	case scsi.Write6, scsi.Write10, scsi.Write12, scsi.Write16:
+		return EmulateWrite(cmd, h.RW)
 	case scsi.Inquiry:
 		if h.Inq == nil {
 			h.Inq = &defaultInquiry
@@ -49,10 +58,6 @@ func (h ReadWriteAtCmdHandler) HandleCommand(cmd *ScsiCmd) (ScsiResponse, error)
 		return EmulateModeSense(cmd, false)
 	case scsi.ModeSelect, scsi.ModeSelect10:
 		return EmulateModeSelect(cmd, false)
-	case scsi.Read6, scsi.Read10, scsi.Read12, scsi.Read16:
-		return EmulateRead(cmd, h.RW)
-	case scsi.Write6, scsi.Write10, scsi.Write12, scsi.Write16:
-		return EmulateWrite(cmd, h.RW)
 	default:
 		return cmd.NotHandled(), nil
 	}
@@ -169,7 +174,7 @@ func EmulateEvpdInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
 		ptr[0] = 2 // code set: ASCII
 		ptr[1] = 0 // identifier: vendor-specific
 
-		cfgString := cmd.VirtBlockDevice().GetDevConfig()
+		cfgString := cmd.VirBlkDev().GetDevConfig()
 		n = copy(ptr[4:], []byte(cfgString))
 		ptr[3] = byte(n + 1)
 
@@ -200,9 +205,9 @@ func EmulateReadCapacity16(cmd *ScsiCmd) (ScsiResponse, error) {
 	buf := make([]byte, 32)
 	order := binary.BigEndian
 	// This is in LBAs, and the "index of the last LBA", so minus 1. Friggin spec.
-	order.PutUint64(buf[0:8], uint64(cmd.VirtBlockDevice().Sizes().VolumeSize/cmd.VirtBlockDevice().Sizes().BlockSize)-1)
+	order.PutUint64(buf[0:8], uint64(cmd.VirBlkDev().Sizes().VolumeSize/cmd.VirBlkDev().Sizes().BlockSize)-1)
 	// This is in BlockSize
-	order.PutUint32(buf[8:12], uint32(cmd.VirtBlockDevice().Sizes().BlockSize))
+	order.PutUint32(buf[8:12], uint32(cmd.VirBlkDev().Sizes().BlockSize))
 	// All the rest is 0
 	cmd.Write(buf)
 	return cmd.Ok(), nil
@@ -322,8 +327,9 @@ func EmulateModeSelect(cmd *ScsiCmd, wce bool) (ScsiResponse, error) {
 }
 
 func EmulateRead(cmd *ScsiCmd, r io.ReaderAt) (ScsiResponse, error) {
-	offset := cmd.LBA() * uint64(cmd.VirtBlockDevice().Sizes().BlockSize)
-	length := int(cmd.XferLen() * uint32(cmd.VirtBlockDevice().Sizes().BlockSize))
+	offset := cmd.LBA() * uint64(cmd.VirBlkDev().Sizes().BlockSize)
+	length := int(cmd.XferLen() * uint32(cmd.VirBlkDev().Sizes().BlockSize))
+
 	if cmd.Buffer == nil {
 		cmd.Buffer = make([]byte, length)
 	}
@@ -333,20 +339,22 @@ func EmulateRead(cmd *ScsiCmd, r io.ReaderAt) (ScsiResponse, error) {
 	}
 	n, err := r.ReadAt(cmd.Buffer[:length], int64(offset))
 	if n < length {
+		log.Errorf("[EmulateRead] ReadAt failed: unable to copy enough")
 		return cmd.MediumError(), nil
 	}
 	if err != nil {
+		log.Errorf("[EmulateRead] Read error: %v", err)
 		return cmd.MediumError(), nil
 	}
 
 	n, err = cmd.Write(cmd.Buffer[:length])
 	if n < length {
-		log.Debugf("read/write failed: unable to copy enough")
+		log.Errorf("[EmulateRead] Write failed: unable to copy enough")
 		return cmd.MediumError(), nil
 	}
 
 	if err != nil {
-		log.Debugf("read/write failed: error:", err.Error())
+		log.Errorf("[EmulateRead] read/write failed: error:", err.Error())
 		return cmd.MediumError(), nil
 	}
 
@@ -354,8 +362,8 @@ func EmulateRead(cmd *ScsiCmd, r io.ReaderAt) (ScsiResponse, error) {
 }
 
 func EmulateWrite(cmd *ScsiCmd, r io.WriterAt) (ScsiResponse, error) {
-	offset := cmd.LBA() * uint64(cmd.VirtBlockDevice().Sizes().BlockSize)
-	length := int(cmd.XferLen() * uint32(cmd.VirtBlockDevice().Sizes().BlockSize))
+	offset := cmd.LBA() * uint64(cmd.VirBlkDev().Sizes().BlockSize)
+	length := int(cmd.XferLen() * uint32(cmd.VirBlkDev().Sizes().BlockSize))
 	if cmd.Buffer == nil {
 		cmd.Buffer = make([]byte, length)
 	}

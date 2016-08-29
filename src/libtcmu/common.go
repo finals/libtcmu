@@ -5,5 +5,5 @@ import (
 )
 
 var (
-	log = logrus.WithFields(logrus.Fields{"pkg": "libtcmu"})
+	log = logrus.WithFields(logrus.Fields{"pkg": "tcmu"})
 )
