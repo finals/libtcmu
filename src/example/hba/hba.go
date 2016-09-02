@@ -86,7 +86,7 @@ func Create(name string, hba *libtcmu.HBA) {
 	//defer fvol1.Close()
 	fi, _ := fvol1.Stat()
 
-	_, err = hba.CreateDevice(fi.Name(), 4 * 1024 *1024 *1024, 1024, fvol1, 2)
+	_, err = hba.CreateDevice(fi.Name(), 2 * 1024 *1024 *1024, 1024, fvol1, 2)
 	if err != nil {
 		die("couldn't tcmu: %v", err)
 	}

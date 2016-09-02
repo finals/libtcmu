@@ -138,6 +138,7 @@ func (cmd *ScsiCmd) Read(b []byte) (int, error) {
 		read := copy(b[boff:], cmd.vecs[cmd.vecoffset][cmd.offset:])
 		boff += read
 		toRead -= read
+		cmd.offset += read
 		if cmd.offset == len(cmd.vecs[cmd.vecoffset]) {
 			cmd.vecoffset++
 			cmd.offset = 0
