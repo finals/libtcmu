@@ -1,4 +1,4 @@
-package libtcmu
+package tcmu
 
 import (
 	"crypto/md5"
@@ -35,6 +35,14 @@ type ScsiResponse struct {
 	id          uint16
 	status      byte
 	senseBuffer []byte
+}
+
+// ScsiCmd Ring buffer
+type ScsiResponseRing struct {
+	capacity int
+	head     int
+	tail     int
+	data     []*ScsiResponse
 }
 
 // Command returns the SCSI command byte for the command. Useful when used as a comparision to the constants in the scsi package:
@@ -232,7 +240,7 @@ func (cmd *ScsiCmd) TargetFailure() ScsiResponse {
 
 type DataSizes struct {
 	VolumeSize int64
-	BlockSize  int64
+	SectorSize int64
 }
 
 type DevReadyFunc func(chan *ScsiCmd, chan ScsiResponse) error
@@ -272,7 +280,7 @@ type NaaWWN struct {
 }
 
 func (n NaaWWN) DeviceID() string {
-	return n.genID("1")
+	return n.genID("0")
 }
 
 func (n NaaWWN) NexusID() string {

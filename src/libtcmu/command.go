@@ -1,4 +1,4 @@
-package libtcmu
+package tcmu
 
 import (
 	"bytes"
@@ -6,12 +6,8 @@ import (
 	"io"
 
 	"libtcmu/scsi"
+	//"crypto/md5"
 )
-
-type ReadWriteAt interface {
-	io.ReaderAt
-	io.WriterAt
-}
 
 // ScsiCmdHandler is a simple request/response handler for SCSI commands commint to TCMU
 // A SCSI error is reported as an SCSIResponse with an error bit set, while returning a Go error is for flagrant,
@@ -64,7 +60,7 @@ func (h ReadWriteAtCmdHandler) HandleCommand(cmd *ScsiCmd) (ScsiResponse, error)
 }
 
 func EmulateInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
-	if (cmd.GetCDB(1) * 0x01) == 0 {
+	if (cmd.GetCDB(1) & 0x01) == 0 {
 		if cmd.GetCDB(2) == 0x00 {
 			return EmulateStdInquiry(cmd, inq)
 		}
@@ -185,6 +181,29 @@ func EmulateEvpdInquiry(cmd *ScsiCmd, inq *InquiryInfo) (ScsiResponse, error) {
 
 		cmd.Write(data[:used])
 		return cmd.Ok(), nil
+	case 0xb0:  // Block Limits
+		data := make([]byte, 64)
+		data[1] = 0xb0
+
+		order := binary.BigEndian
+		order.PutUint16(data[2:4], uint16(0x3c))
+
+		blockSize, err := cmd.VirBlkDev().GetDeviceAttr("hw_block_size")
+		if err != nil {
+			return cmd.IllegalRequest(), nil
+		}
+
+		maxSectors, err := cmd.VirBlkDev().GetDeviceAttr("hw_max_sectors")
+		if err != nil {
+			return cmd.IllegalRequest(), nil
+		}
+
+		masXferLength := maxSectors / (blockSize / 512)
+		order = binary.BigEndian
+		order.PutUint32(data[8:12], uint32(masXferLength))
+		order.PutUint32(data[12:16], uint32(masXferLength))
+		cmd.Write(data[:64])
+		return cmd.Ok(), nil
 	default:
 		return cmd.IllegalRequest(), nil
 	}
@@ -205,9 +224,9 @@ func EmulateReadCapacity16(cmd *ScsiCmd) (ScsiResponse, error) {
 	buf := make([]byte, 32)
 	order := binary.BigEndian
 	// This is in LBAs, and the "index of the last LBA", so minus 1. Friggin spec.
-	order.PutUint64(buf[0:8], uint64(cmd.VirBlkDev().Sizes().VolumeSize/cmd.VirBlkDev().Sizes().BlockSize)-1)
+	order.PutUint64(buf[0:8], uint64(cmd.VirBlkDev().Sizes().VolumeSize/cmd.VirBlkDev().Sizes().SectorSize)-1)
 	// This is in BlockSize
-	order.PutUint32(buf[8:12], uint32(cmd.VirBlkDev().Sizes().BlockSize))
+	order.PutUint32(buf[8:12], uint32(cmd.VirBlkDev().Sizes().SectorSize))
 	// All the rest is 0
 	cmd.Write(buf)
 	return cmd.Ok(), nil
@@ -230,8 +249,9 @@ func CachingModePage(w io.Writer, wce bool) {
 	buf := make([]byte, 20)
 	buf[0] = 0x08 // caching mode page
 	buf[1] = 0x12 // page length (20, forced)
+	//buf[2] = buf[2] | 0x01  //set RCD
 	if wce {
-		buf[2] = buf[2] | 0x04
+		buf[2] = buf[2] | 0x04  //set WCE
 	}
 	w.Write(buf)
 }
@@ -327,17 +347,20 @@ func EmulateModeSelect(cmd *ScsiCmd, wce bool) (ScsiResponse, error) {
 }
 
 func EmulateRead(cmd *ScsiCmd, r io.ReaderAt) (ScsiResponse, error) {
-	offset := cmd.LBA() * uint64(cmd.VirBlkDev().Sizes().BlockSize)
-	length := int(cmd.XferLen() * uint32(cmd.VirBlkDev().Sizes().BlockSize))
-
-	if cmd.Buffer == nil {
-		cmd.Buffer = make([]byte, length)
-	}
-	if len(cmd.Buffer) < int(length) {
-		//realloc
-		cmd.Buffer = make([]byte, length)
-	}
-	n, err := r.ReadAt(cmd.Buffer[:length], int64(offset))
+	offset := cmd.LBA() * uint64(cmd.VirBlkDev().Sizes().SectorSize)
+	length := int(cmd.XferLen() * uint32(cmd.VirBlkDev().Sizes().SectorSize))
+    //log.Debugf("EmulateRead offset:%d length:%d", offset, length)
+	cmd.Buffer = make([]byte, length)
+	/*
+		if cmd.Buffer == nil {
+			cmd.Buffer = make([]byte, length)
+		}
+		if len(cmd.Buffer) < int(length) {
+			//realloc
+			cmd.Buffer = make([]byte, length)
+		}
+	*/
+	n, err := r.ReadAt(cmd.Buffer, int64(offset))
 	if n < length {
 		log.Errorf("[EmulateRead] ReadAt failed: unable to copy enough")
 		return cmd.MediumError(), nil
@@ -346,8 +369,8 @@ func EmulateRead(cmd *ScsiCmd, r io.ReaderAt) (ScsiResponse, error) {
 		log.Errorf("[EmulateRead] Read error: %v", err)
 		return cmd.MediumError(), nil
 	}
-
-	n, err = cmd.Write(cmd.Buffer[:length])
+	//log.Debugf("[EmulateRead] recv type:%d seq:%d offset:%d size:%d md5:%x", 0, 0, offset, len(cmd.Buffer), md5.Sum(cmd.Buffer))
+	n, err = cmd.Write(cmd.Buffer)
 	if n < length {
 		log.Errorf("[EmulateRead] Write failed: unable to copy enough")
 		return cmd.MediumError(), nil
@@ -362,18 +385,33 @@ func EmulateRead(cmd *ScsiCmd, r io.ReaderAt) (ScsiResponse, error) {
 }
 
 func EmulateWrite(cmd *ScsiCmd, r io.WriterAt) (ScsiResponse, error) {
-	offset := cmd.LBA() * uint64(cmd.VirBlkDev().Sizes().BlockSize)
-	length := int(cmd.XferLen() * uint32(cmd.VirBlkDev().Sizes().BlockSize))
-	if cmd.Buffer == nil {
-		cmd.Buffer = make([]byte, length)
-	}
-	if len(cmd.Buffer) < int(length) {
-		//realloc
-		cmd.Buffer = make([]byte, length)
-	}
-	n, err := cmd.Read(cmd.Buffer[:int(length)])
+	offset := cmd.LBA() * uint64(cmd.VirBlkDev().Sizes().SectorSize)
+	length := int(cmd.XferLen() * uint32(cmd.VirBlkDev().Sizes().SectorSize))
+	//log.Debugf("EmulateWrite offset:%d length:%d", offset, length)
+	cmd.Buffer = make([]byte, length)
+	/*
+		if cmd.Buffer == nil {
+			cmd.Buffer = make([]byte, length)
+		}
+		if len(cmd.Buffer) < int(length) {
+			//realloc
+			cmd.Buffer = make([]byte, length)
+		}
+	*/
+
+	n, err := cmd.Read(cmd.Buffer)
 	if n < length {
 		log.Debugf("write/read failed: unable to copy enough")
+		return cmd.MediumError(), nil
+	}
+	if err != nil {
+		log.Debugf("write/read failed: error:", err.Error())
+		return cmd.MediumError(), nil
+	}
+
+	n, err = r.WriteAt(cmd.Buffer, int64(offset))
+	if n < length {
+		log.Debugf("write/write failed: unable to copy enough")
 		return cmd.MediumError(), nil
 	}
 	if err != nil {
@@ -381,14 +419,5 @@ func EmulateWrite(cmd *ScsiCmd, r io.WriterAt) (ScsiResponse, error) {
 		return cmd.MediumError(), nil
 	}
 
-	n, err = r.WriteAt(cmd.Buffer[:length], int64(offset))
-	if n < length {
-		log.Debugf("write/read failed: unable to copy enough")
-		return cmd.MediumError(), nil
-	}
-	if err != nil {
-		log.Debugf("read/write failed: error:", err.Error())
-		return cmd.MediumError(), nil
-	}
 	return cmd.Ok(), nil
 }

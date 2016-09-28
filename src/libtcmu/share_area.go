@@ -1,4 +1,4 @@
-package libtcmu
+package tcmu
 
 import (
 	"encoding/binary"
@@ -47,7 +47,7 @@ type tcmuOpcode int
 
 const (
 	tcmuOpPad tcmuOpcode = 0
-	tcmuOpCmd = 1
+	tcmuOpCmd            = 1
 )
 
 /*
@@ -63,32 +63,32 @@ struct tcmu_cmd_entry_hdr {
 } __packed;
 */
 func (vbd *VirBlkDev) entHdrOp(off int) tcmuOpcode {
-	i := int(*(*uint32)(unsafe.Pointer(&vbd.mmap[off + offLenOp])))
+	i := int(*(*uint32)(unsafe.Pointer(&vbd.mmap[off+offLenOp])))
 	i = i & 0x7
 	return tcmuOpcode(i)
 }
 
 func (vbd *VirBlkDev) entHdrGetLen(off int) int {
-	i := *(*uint32)(unsafe.Pointer(&vbd.mmap[off + offLenOp]))
+	i := *(*uint32)(unsafe.Pointer(&vbd.mmap[off+offLenOp]))
 	i = i &^ 0x7
 	return int(i)
 }
 
 func (vbd *VirBlkDev) entCmdId(off int) uint16 {
-	return *(*uint16)(unsafe.Pointer(&vbd.mmap[off + offCmdId]))
+	return *(*uint16)(unsafe.Pointer(&vbd.mmap[off+offCmdId]))
 }
 func (vbd *VirBlkDev) setEntCmdId(off int, id uint16) {
-	*(*uint16)(unsafe.Pointer(&vbd.mmap[off + offCmdId])) = id
+	*(*uint16)(unsafe.Pointer(&vbd.mmap[off+offCmdId])) = id
 }
 func (vbd *VirBlkDev) entKflags(off int) uint8 {
-	return *(*uint8)(unsafe.Pointer(&vbd.mmap[off + offKFlags]))
+	return *(*uint8)(unsafe.Pointer(&vbd.mmap[off+offKFlags]))
 }
 func (vbd *VirBlkDev) entUflags(off int) uint8 {
-	return *(*uint8)(unsafe.Pointer(&vbd.mmap[off + offUFlags]))
+	return *(*uint8)(unsafe.Pointer(&vbd.mmap[off+offUFlags]))
 }
 
 func (vbd *VirBlkDev) setEntUflagUnknownOp(off int) {
-	vbd.mmap[off + offUFlags] = 0x01
+	vbd.mmap[off+offUFlags] = 0x01
 }
 
 /*
@@ -121,27 +121,27 @@ struct tcmu_cmd_entry {
 */
 
 func (vbd *VirBlkDev) entReqIovCnt(off int) uint32 {
-	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off + offReqIovCnt]))
+	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off+offReqIovCnt]))
 }
 
 func (vbd *VirBlkDev) entReqIovBidiCnt(off int) uint32 {
-	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off + offReqIovBidiCnt]))
+	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off+offReqIovBidiCnt]))
 }
 
 func (vbd *VirBlkDev) entReqIovDifCnt(off int) uint32 {
-	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off + offReqIovDifCnt]))
+	return *(*uint32)(unsafe.Pointer(&vbd.mmap[off+offReqIovDifCnt]))
 }
 
 func (vbd *VirBlkDev) entReqCdbOff(off int) uint64 {
-	return *(*uint64)(unsafe.Pointer(&vbd.mmap[off + offReqCdbOff]))
+	return *(*uint64)(unsafe.Pointer(&vbd.mmap[off+offReqCdbOff]))
 }
 
 func (vbd *VirBlkDev) setEntRespSCSIStatus(off int, status byte) {
-	vbd.mmap[off + offRespSCSIStatus] = status
+	vbd.mmap[off+offRespSCSIStatus] = status
 }
 
 func (vbd *VirBlkDev) copyEntRespSenseData(off int, data []byte) {
-	buf := vbd.mmap[off + offRespSense : off + offRespSense + SENSE_BUFFER_SIZE]
+	buf := vbd.mmap[off+offRespSense : off+offRespSense+SENSE_BUFFER_SIZE]
 	copy(buf, data)
 	if len(data) < SENSE_BUFFER_SIZE {
 		for i := len(data); i < SENSE_BUFFER_SIZE; i++ {
@@ -152,16 +152,16 @@ func (vbd *VirBlkDev) copyEntRespSenseData(off int, data []byte) {
 
 func (vbd *VirBlkDev) entIovecN(off int, idx int) []byte {
 	out := syscall.Iovec{}
-	p := unsafe.Pointer(&vbd.mmap[off + offReqIov0Base])
-	out = *(*syscall.Iovec)(unsafe.Pointer(uintptr(p) + uintptr(idx) * unsafe.Sizeof(out)))
+	p := unsafe.Pointer(&vbd.mmap[off+offReqIov0Base])
+	out = *(*syscall.Iovec)(unsafe.Pointer(uintptr(p) + uintptr(idx)*unsafe.Sizeof(out)))
 	moff := *(*int)(unsafe.Pointer(&out.Base))
-	return vbd.mmap[moff : moff + int(out.Len)]
+	return vbd.mmap[moff : moff+int(out.Len)]
 }
 
 func (vbd *VirBlkDev) entCdb(off int) []byte {
 	cdbStart := int(vbd.entReqCdbOff(off))
 	len := vbd.cdbLen(cdbStart)
-	return vbd.mmap[cdbStart : cdbStart + len]
+	return vbd.mmap[cdbStart : cdbStart+len]
 }
 
 func (vbd *VirBlkDev) cdbLen(cdbStart int) int {
@@ -173,7 +173,7 @@ func (vbd *VirBlkDev) cdbLen(cdbStart int) int {
 	} else if opcode <= 0x5f {
 		return 10
 	} else if opcode == 0x7f {
-		return int(vbd.mmap[cdbStart + 7]) + 8
+		return int(vbd.mmap[cdbStart+7]) + 8
 	} else if opcode >= 0x80 && opcode <= 0x9f {
 		return 16
 	} else if opcode >= 0xa0 && opcode <= 0xbf {

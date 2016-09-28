@@ -1,6 +1,6 @@
 // +build arm
 
-package libtcmu
+package tcmu
 
 // This file works for the build tags above. To port to other architectures,
 // check the offsets from C using the included test.c.

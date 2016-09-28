@@ -1,4 +1,4 @@
-package libtcmu
+package tcmu
 
 import (
 	"fmt"
@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	CREATE_TIMEOUT = 10 * time.Second
+	CREATE_TIMEOUT = 15 * time.Second
 
 	SUCCESS = 0
 	ERROR   = 1
@@ -78,7 +78,7 @@ func (h *HBA) Stop() error {
 	return nil
 }
 
-func (h *HBA) CreateDevice(name string, size int64, sectorSize int64, rw ReadWriteAt, threads int) (*VirBlkDev, error) {
+func (h *HBA) CreateDevice(name string, size int64, sectorSize int64, rw ReadWriteAt) (*VirBlkDev, error) {
 	h.Lock()
 	//defer h.Unlock()
 
@@ -102,7 +102,7 @@ func (h *HBA) CreateDevice(name string, size int64, sectorSize int64, rw ReadWri
 			),
 		*/
 	}
-	h.lunid++
+	//h.lunid++
 
 	completion := make(chan int)
 	go h.CreateDeviceComplete(completion)
@@ -115,14 +115,15 @@ func (h *HBA) CreateDevice(name string, size int64, sectorSize int64, rw ReadWri
 	result := <-completion
 	if result != SUCCESS {
 		vbd.Close()
+		h.vbdInitializing = nil
 		log.Errorf("[CreateDevice] devPath:%s, wait to generate device error:%d", result)
-		return nil, fmt.Errorf(err.Error())
+		return nil, fmt.Errorf("wait generate device error/timeout")
 	}
+	h.vbdInitializing = nil
 	return vbd, nil
 }
 
 func (h *HBA) CreateDeviceComplete(completion chan int) {
-	//log.Infof("[CreateDeviceComplete] start")
 	timeout := time.After(CREATE_TIMEOUT)
 	for {
 		select {
@@ -138,22 +139,25 @@ func (h *HBA) CreateDeviceComplete(completion chan int) {
 				continue
 			}
 
-			if h.vbdInitializing != nil {
-				dnum := dev.Devnum()
+		    retry := 300
+		    for i := 0; i < retry; i++ {
+			    if h.vbdInitializing != nil {
+				    dnum := dev.Devnum()
 
-				h.vbdInitializing.SetDeviceNumber(dnum.Major(), dnum.Minor())
-				err := h.vbdInitializing.GenerateDevice()
-				h.Unlock()
-				if err != nil {
-					log.Errorf("[CreateDeviceComplete] Generate virtdisk device error:%s", err.Error())
-					completion <- ERROR
-				} else {
-					h.vbds[h.vbdInitializing.deviceName] = h.vbdInitializing
-					completion <- SUCCESS
-				}
-				h.vbdInitializing = nil
-				return
-			}
+				    h.vbdInitializing.SetDeviceNumber(dnum.Major(), dnum.Minor())
+				    err := h.vbdInitializing.GenerateDevice()
+				    h.Unlock()
+				    if err != nil {
+					    log.Errorf("[CreateDeviceComplete] Generate virtdisk device error:%s", err.Error())
+					    completion <- ERROR
+				    } else {
+					    h.vbds[h.vbdInitializing.deviceName] = h.vbdInitializing
+					    completion <- SUCCESS
+				    }
+				    return
+			    }
+			    time.Sleep(50 * time.Millisecond)
+		    }
 		case <-timeout:
 			log.Errorf("[CreateDeviceComplete] Generate virtdisk device error:Timeout")
 			h.Unlock()
@@ -182,6 +186,12 @@ func (h *HBA) RemoveDevice(name string) error {
 }
 
 func (h *HBA) monitorDeviceEvent() {
+	defer func() {
+		if err := recover(); err != nil {
+
+		}
+	}()
+
 	log.Infof("[monitorDeviceEvent] Start Monitor Device Event")
 	u := udev.Udev{}
 	m := u.NewMonitorFromNetlink("udev")

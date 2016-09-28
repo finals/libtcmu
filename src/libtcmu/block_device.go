@@ -1,4 +1,4 @@
-package libtcmu
+package tcmu
 
 import (
 	"fmt"
@@ -19,6 +19,8 @@ import (
 const (
 	CONFIG_DIR_FORMAT = "/sys/kernel/config/target/core/user_%d"
 	SCSI_DIR = "/sys/kernel/config/target/loopback"
+
+	CMD_RING_SIZE = 128
 )
 
 type VirBlkDev struct {
@@ -41,6 +43,9 @@ type VirBlkDev struct {
 	initialize bool
 	shut       chan struct{}
 	wait       chan struct{}
+
+	cmdRing    *ScsiResponseRing
+	cmdDone    chan int
 }
 
 // WWN provides two WWNs, one for the device itself and one for the loopback device created by the kernel.
@@ -95,6 +100,13 @@ func newVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirBlkDev, error) {
 		initialize: false,
 		shut:       make(chan struct{}),
 		wait:       make(chan struct{}),
+		cmdRing:    &ScsiResponseRing{
+			capacity: CMD_RING_SIZE,
+			head:     0,
+			tail:     0,
+			data:     make([]*ScsiResponse, CMD_RING_SIZE),
+		},
+		cmdDone:    make(chan int, CMD_RING_SIZE),
 	}
 	err := vbd.Close()
 	if err != nil {
@@ -106,6 +118,7 @@ func newVirtBlockDevice(devPath string, scsi *ScsiHandler) (*VirBlkDev, error) {
 		log.Errorf("[newVirtBlockDevice] vbd:%s create pipe error:%s", vbd.devPath, err)
 		return nil, err
 	}
+
 	vbd.initialize = true
 	if err := vbd.preEnableTcmu(); err != nil {
 		log.Errorf("[newVirtBlockDevice] vbd:%s preEnableTcmu error:%s", vbd.devPath, err.Error())
@@ -150,7 +163,7 @@ func (vbd *VirBlkDev) preEnableTcmu() error {
 	err := writeLines(path.Join(vbd.hbaDir, vbd.scsi.VolumeName, "control"), []string{
 		fmt.Sprintf("dev_size=%d", vbd.scsi.DataSizes.VolumeSize),
 		fmt.Sprintf("dev_config=%s", vbd.GetDevConfig()),
-		fmt.Sprintf("hw_block_size=%d", vbd.scsi.DataSizes.BlockSize),
+		fmt.Sprintf("hw_block_size=%d", vbd.scsi.DataSizes.SectorSize),
 		"async=1",
 	})
 	if err != nil {
@@ -208,6 +221,20 @@ func (vbd *VirBlkDev) GenerateDevice() error {
 	return nil
 }
 
+func (vbd *VirBlkDev) GetDeviceAttr(attr string) (int, error) {
+	att, err := ioutil.ReadFile(fmt.Sprintf("/sys/kernel/config/target/core/user_%d/%s/attrib/%s", vbd.scsi.HBA, vbd.scsi.VolumeName, attr))
+	if err != nil {
+		return 0, err
+	}
+
+	i, err := strconv.Atoi(string(att))
+	if err != nil {
+		return 0, err
+	}
+
+	return i, nil
+}
+
 func mknod(device string, major, minor int) error {
 	var fileMode os.FileMode = 0600
 	fileMode |= syscall.S_IFBLK
@@ -247,7 +274,7 @@ func (vbd *VirBlkDev) start() (err error) {
 
 	//vbd.cmdChan = make(chan *ScsiCmd, 128)
 	//vbd.respChan = make(chan ScsiResponse, 128)
-	go vbd.startPoll()
+	go vbd.startPollx()
 	//go vbd.beginPoll()
 	//vbd.scsi.DevReady(vbd.cmdChan, vbd.respChan)
 	return
@@ -392,7 +419,7 @@ func removeAsync(path string, done chan <- error) {
 	done <- nil
 }
 
-func remove1(path string) error {
+func remove(path string) error {
 	done := make(chan error)
 	go removeAsync(path, done)
 	select {
@@ -403,7 +430,7 @@ func remove1(path string) error {
 	}
 }
 
-func remove(path string) error {
+func remove1(path string) error {
 	//fmt.Printf("Removing: %s\n", path)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		log.Warnf("[remove] Unable to remove: %s", path)

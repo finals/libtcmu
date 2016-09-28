@@ -1,4 +1,4 @@
-package libtcmu
+package tcmu
 
 import (
 	"fmt"
@@ -96,8 +96,90 @@ func (vbd *VirBlkDev) startPoll0() {
 }
 */
 
+func (vbd *VirBlkDev) startPollx() {
+	//log.Debugf("startPollx")
+	ch := make(chan bool)
+	defer close(ch)
+
+	//go vbd.recvResponse()
+	go vbd.startRespx()
+	go vbd.waitForNextCommand(ch)
+	for {
+		select {
+		case success := <-ch:
+			if !success {
+				vbd.wait <- struct{}{}
+				return
+			}
+           // log.Debugf("11111")
+			vbd.clearUioEvents()
+			cmd, _ := vbd.getNextCommand() //never return err
+			for cmd != nil {
+				//log.Debugf("head:%d tail:%d size: %d", vbd.cmdRing.head, vbd.cmdRing.tail,vbd.cmdRing.head - vbd.cmdRing.tail)
+
+				go vbd.HandleRequestx(cmd, vbd.cmdRing.head)
+				vbd.cmdRing.head += 1
+				if vbd.cmdRing.head >= CMD_RING_SIZE {
+					vbd.cmdRing.head = 0
+				}
+				cmd, _ = vbd.getNextCommand() //never return err
+			}
+		case <-vbd.shut:
+			log.Infof("[startPoll] vbd:%s Exit...", vbd.devPath)
+			vbd.wait <- struct{}{}
+			return
+		}
+	}
+}
+
+func (vbd *VirBlkDev) HandleRequestx(cmd *ScsiCmd, index int) {
+
+	resp, _ := vbd.scsi.Handler.HandleCommand(cmd)
+
+	vbd.cmdRing.data[index] = &resp
+
+    vbd.cmdDone <- index
+}
+
+func (vbd *VirBlkDev) startRespx() {
+	//log.Debugf("startRespx")
+	for {
+		select {
+		case index := <-vbd.cmdDone:
+			if vbd.cmdRing.tail == index {
+				for {
+					resp := vbd.cmdRing.data[vbd.cmdRing.tail]
+					if resp == nil {
+						break
+					}
+					buf := make([]byte, 4)
+					vbd.completeCommand(*resp) //never return err, ignore ret value
+
+					/* Tell the fd there's something new */
+					n, err := unix.Write(vbd.uioFd, buf)
+					if n == -1 && err != nil {
+						log.Errorf("[HandleRequest] write to uio error: %s", err)
+					}
+					vbd.cmdRing.data[vbd.cmdRing.tail] = nil
+					vbd.cmdRing.tail++
+					if vbd.cmdRing.tail >= CMD_RING_SIZE {
+						vbd.cmdRing.tail = 0
+					}
+				}
+
+			} else if vbd.cmdRing.tail > index {
+				//fatal error
+			}
+		case <-vbd.shut:
+			log.Infof("[startRespx] vbd:%s Exit...", vbd.devPath)
+			vbd.wait <- struct{}{}
+			return
+		}
+	}
+}
+
 func (vbd *VirBlkDev) startPoll() {
-	ch := make(chan bool, 128)
+	ch := make(chan bool)
 	defer close(ch)
 	//go vbd.recvResponse()
 	go vbd.waitForNextCommand(ch)
@@ -113,7 +195,8 @@ func (vbd *VirBlkDev) startPoll() {
 			cmd, _ := vbd.getNextCommand() //never return err
 			for cmd != nil {
 				//vbd.cmdChan <- cmd
-				go vbd.HandleRequest(cmd)
+				//go vbd.HandleRequest(cmd)
+				vbd.HandleRequest(cmd)
 				cmd, _ = vbd.getNextCommand() //never return err
 			}
 		case <-vbd.shut:
@@ -130,8 +213,8 @@ func (vbd *VirBlkDev) HandleRequest(cmd *ScsiCmd) {
 	buf := make([]byte, 4)
 	var n int
 
-	vbd.Lock()
-	defer vbd.Unlock()
+	//vbd.Lock()
+	//defer vbd.Unlock()
 
 	vbd.completeCommand(resp) //never return err, ignore ret value
 
@@ -159,18 +242,18 @@ func (vbd *VirBlkDev) waitForNextCommand(ch chan bool) {
 
 		_, err := unix.Poll(pfd, -1)
 		if err != nil {
-			//ch <- false
+			ch <- false
 			log.Errorf("[waitForNextCommand] vbd:%s Poll command failed: %s", vbd.devPath, err)
 			break
 		}
 		if pfd[1].Revents == unix.POLLIN {
-			//ch <- false
+			ch <- false
 			log.Errorf("[waitForNextCommand] vbd:%s Poll command receive finish signal", vbd.devPath)
 			break
 		}
 
 		if pfd[0].Revents != 0 && pfd[0].Revents != unix.POLLIN {
-			//ch <- false
+			ch <- false
 			log.Errorf("[waitForNextCommand] vbd:%s Poll receive unexpect event: %d", vbd.devPath, pfd[0].Revents)
 			break
 		}
@@ -199,7 +282,7 @@ func (vbd *VirBlkDev) stopPoll() {
 			log.Errorf("[stopPoll] Fail to notify poll for finishing: %s", err.Error())
 		}
 
-		close(vbd.shut)
+		//close(vbd.shut)
 	}
 }
 
