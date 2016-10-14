@@ -274,8 +274,8 @@ func (vbd *VirBlkDev) start() (err error) {
 
 	//vbd.cmdChan = make(chan *ScsiCmd, 128)
 	//vbd.respChan = make(chan ScsiResponse, 128)
-	go vbd.startPollx()
-	//go vbd.beginPoll()
+	//go vbd.startPollx()
+	go vbd.startPoll()
 	//vbd.scsi.DevReady(vbd.cmdChan, vbd.respChan)
 	return
 }
