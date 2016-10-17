@@ -37,17 +37,17 @@ var defaultInquiry = InquiryInfo{
 
 func (h ReadWriteAtCmdHandler) HandleCommand(cmd *ScsiCmd) (ScsiResponse, error) {
 	switch cmd.Command() {
-	case scsi.Read6, scsi.Read10, scsi.Read12, scsi.Read16:
-		return EmulateRead(cmd, h.RW)
-	case scsi.Write6, scsi.Write10, scsi.Write12, scsi.Write16:
-		return EmulateWrite(cmd, h.RW)
+	case scsi.TestUnitReady:
+		return EmulateTestUnitReady(cmd)
 	case scsi.Inquiry:
 		if h.Inq == nil {
 			h.Inq = &defaultInquiry
 		}
 		return EmulateInquiry(cmd, h.Inq)
-	case scsi.TestUnitReady:
-		return EmulateTestUnitReady(cmd)
+	case scsi.Read6, scsi.Read10, scsi.Read12, scsi.Read16:
+		return EmulateRead(cmd, h.RW)
+	case scsi.Write6, scsi.Write10, scsi.Write12, scsi.Write16:
+		return EmulateWrite(cmd, h.RW)
 	case scsi.ServiceActionIn16:
 		return EmulateServiceActionIn(cmd)
 	case scsi.ModeSense, scsi.ModeSense10:

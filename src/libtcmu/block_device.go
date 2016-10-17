@@ -20,7 +20,7 @@ const (
 	CONFIG_DIR_FORMAT = "/sys/kernel/config/target/core/user_%d"
 	SCSI_DIR = "/sys/kernel/config/target/loopback"
 
-	CMD_RING_SIZE = 128
+	CMD_RING_SIZE = 1024
 )
 
 type VirBlkDev struct {
@@ -275,7 +275,7 @@ func (vbd *VirBlkDev) start() (err error) {
 	//vbd.cmdChan = make(chan *ScsiCmd, 128)
 	//vbd.respChan = make(chan ScsiResponse, 128)
 	//go vbd.startPollx()
-	go vbd.startPoll()
+	go vbd.startPollx()
 	//vbd.scsi.DevReady(vbd.cmdChan, vbd.respChan)
 	return
 }

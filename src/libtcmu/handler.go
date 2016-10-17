@@ -2,11 +2,11 @@ package tcmu
 
 import (
 	"fmt"
+	"syscall"
 
 	"libtcmu/scsi"
 
 	"golang.org/x/sys/unix"
-	"syscall"
 )
 
 /*
