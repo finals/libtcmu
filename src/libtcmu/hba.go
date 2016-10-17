@@ -3,22 +3,20 @@ package tcmu
 import (
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/jochenvg/go-udev"
-	//"util/fs"
-	"io/ioutil"
+
 )
 
 const (
 	CREATE_TIMEOUT = 15 * time.Second
-
+/*
 	SUCCESS = 0
 	ERROR   = 1
 	TIMEOUT = 2
-
+*/
 	DEV_DIR_NAME = "comet"
 )
 
@@ -232,23 +230,5 @@ func (h *HBA) monitorDeviceEvent() {
 			return
 		}
 
-	}
-}
-
-func IsTcmuDevice(bd string) (bool, error) {
-	blockdevice := strings.TrimLeft(bd, "/dev/")
-	buf, err := ioutil.ReadFile("/sys/block/" + blockdevice + "/device/model")
-	if err != nil {
-		return false, err
-	}
-	return strings.Contains(string(buf), "TCMU"), nil
-}
-
-func IsDirExists(path string) bool {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return os.IsExist(err)
-	} else {
-		return fi.IsDir()
 	}
 }
